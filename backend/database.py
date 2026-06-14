@@ -1,0 +1,173 @@
+import os
+from datetime import datetime
+from typing import Optional
+from dotenv import load_dotenv
+from sqlalchemy import String, DateTime, func, text
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+# Load environment variables from .env file (supports running from root or backend folder)
+load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
+
+# Retrieve database connection URL from environment or .env file
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    # Ensure the dialect is set to postgresql+asyncpg for async operations
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+asyncpg://"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+else:
+    # Fallback default for local development
+    DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/whatsapp_sms"
+
+# Create async engine with pooling enabled
+engine = create_async_engine(
+    DATABASE_URL,
+    pool_size=20,
+    max_overflow=10,
+    pool_recycle=1800,
+    pool_pre_ping=True
+)
+
+# Async session factory
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+
+# Base class for declarative models
+class Base(DeclarativeBase):
+    pass
+
+class Record(Base):
+    __tablename__ = "records"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    student_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    parent_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    selected_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    
+    # Statuses
+    campaign_status: Mapped[str] = mapped_column(String(50), default="Pending")
+    delivery_status: Mapped[str] = mapped_column(String(50), default="Unsent")
+    parent_response: Mapped[str] = mapped_column(String(50), default="No Response")
+    
+    # Message Tracking ID from WhatsApp API
+    message_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    
+    # Timestamps
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        """Converts model fields to a dict serialization format."""
+        return {
+            "id": self.id,
+            "student_name": self.student_name,
+            "parent_name": self.parent_name,
+            "selected_branch": self.selected_branch,
+            "phone_number": self.phone_number,
+            "campaign_status": self.campaign_status,
+            "delivery_status": self.delivery_status,
+            "parent_response": self.parent_response,
+            "message_id": self.message_id,
+            "sent_at": self.sent_at.isoformat() if self.sent_at else None,
+            "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
+            "read_at": self.read_at.isoformat() if self.read_at else None,
+            "responded_at": self.responded_at.isoformat() if self.responded_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+class CampaignTemplate(Base):
+    __tablename__ = "campaign_templates"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    template_text: Mapped[str] = mapped_column(String(1000), nullable=False)
+    media_type: Mapped[Optional[str]] = mapped_column(String(50), default="none", server_default="none", nullable=True)
+    media_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False
+    )
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+
+async def init_db():
+    """Initializes the database schema by creating required tables and seeding default template."""
+    async with engine.begin() as conn:
+        # Create all tables in the database if they do not exist
+        await conn.run_sync(Base.metadata.create_all)
+        # Apply columns dynamically for media attachments if missing
+        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS media_type VARCHAR(50) DEFAULT 'none'"))
+        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS media_url VARCHAR(1000)"))
+        
+    # Seed default template if empty
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select
+        stmt = select(CampaignTemplate).limit(1)
+        result = await session.execute(stmt)
+        template = result.scalar_one_or_none()
+        
+        if not template:
+            default_text = (
+                "Dear [Parent Name], greetings from College Admissions. Your child [Student Name] "
+                "has been selected for the [Selected Branch] branch. To block the seat, please pay "
+                "the ₹50,000 advance fee. Click below to confirm interest: [Interested] / [Not Interested]"
+            )
+            default_template = CampaignTemplate(template_text=default_text)
+            session.add(default_template)
+            await session.commit()
+
+    # Seed default admin user
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select, delete
+        import bcrypt
+        
+        # Delete any admin user that is not 'admin' to ensure only one admin exists
+        await session.execute(delete(AdminUser).where(AdminUser.username != "admin"))
+        
+        # Check if 'admin' user exists
+        stmt = select(AdminUser).where(AdminUser.username == "admin")
+        result = await session.execute(stmt)
+        admin_user = result.scalar_one_or_none()
+        
+        # Seed or reset credentials to admin / admin123
+        hashed = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        if not admin_user:
+            admin_user = AdminUser(username="admin", hashed_password=hashed)
+            session.add(admin_user)
+        else:
+            admin_user.hashed_password = hashed
+            
+        await session.commit()
+
+async def get_db():
+    """Dependency for providing database sessions to FastAPI routes."""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
