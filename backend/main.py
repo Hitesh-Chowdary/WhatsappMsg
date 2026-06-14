@@ -818,6 +818,9 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 for status_obj in statuses:
                     wamid = status_obj.get("id")
                     status = status_obj.get("status")
+                    logger.info(f"Meta webhook status update: id={wamid}, status={status}")
+                    if status == "failed":
+                        logger.error(f"Meta webhook reports dispatch failed: {status_obj}")
                     await process_webhook_event(
                         event="status_update",
                         message_id=wamid,
