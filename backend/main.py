@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 import pandas as pd
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, func, or_, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Setup path logic to ensure clean imports when running from root or backend folder

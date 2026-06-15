@@ -131,17 +131,41 @@ class MetaWhatsAppClient(WhatsAppClient):
         
         # Build components parameter array
         parameters = []
-        if variable_names is not None:
-            vars_list = variable_names
-        else:
+        vars_list = variable_names or []
+        
+        # If variable names list is empty, try to fetch/parse it from the DB
+        if not vars_list:
+            try:
+                from database import AsyncSessionLocal, CampaignTemplate
+                from sqlalchemy import select
+                async with AsyncSessionLocal() as session:
+                    stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == active_template_name)
+                    res = await session.execute(stmt)
+                    t_obj = res.scalar_one_or_none()
+                    if t_obj:
+                        if t_obj.variable_names:
+                            vars_list = [v.strip() for v in t_obj.variable_names.split(",") if v.strip()]
+                        elif t_obj.template_text:
+                            import re
+                            parsed_vars = re.findall(r"\{\{([^}]+)\}\}", t_obj.template_text)
+                            vars_list = [v.strip() for v in parsed_vars if v.strip()]
+            except Exception as db_err:
+                logger.error(f"Error fetching template variables from DB: {db_err}")
+
+        # If still empty, fall back to environment variable
+        if not vars_list:
             var_names_str = os.getenv("META_TEMPLATE_VARIABLE_NAMES")
             if var_names_str:
                 vars_list = [v.strip() for v in var_names_str.split(",") if v.strip()]
-            else:
-                vars_list = []
+
+        # Determine if template uses positional (e.g. {{1}}, {{2}}) or named variables
+        is_positional = False
+        if vars_list:
+            if all(v.isdigit() for v in vars_list):
+                is_positional = True
 
         if template_variables:
-            if vars_list:
+            if vars_list and not is_positional:
                 # Use named parameters based on the list
                 for var_name in vars_list:
                     val = template_variables.get(var_name)
@@ -162,15 +186,34 @@ class MetaWhatsAppClient(WhatsAppClient):
                     })
             else:
                 # Positional parameters: no parameter_name key
-                for key in ["parent_name", "student_name", "selected_branch"]:
-                    if key in template_variables:
+                if is_positional:
+                    sorted_vars = sorted(vars_list, key=lambda x: int(x) if x.isdigit() else 999)
+                    for var_num in sorted_vars:
+                        val = ""
+                        if var_num.isdigit():
+                            idx = int(var_num)
+                            if idx == 1:
+                                val = template_variables.get("parent_name") or template_variables.get("student_name") or ""
+                            elif idx == 2:
+                                val = template_variables.get("student_name") or template_variables.get("selected_branch") or ""
+                            elif idx == 3:
+                                val = template_variables.get("selected_branch") or ""
+                        else:
+                            val = template_variables.get(var_num, "")
                         parameters.append({
                             "type": "text",
-                            "text": str(template_variables[key])
+                            "text": str(val)
                         })
+                else:
+                    for key in ["parent_name", "student_name", "selected_branch"]:
+                        if key in template_variables:
+                            parameters.append({
+                                "type": "text",
+                                "text": str(template_variables[key])
+                            })
         else:
-            # Fallback parsing from defaults
-            if vars_list:
+            # Fallback parsing from defaults when template_variables is not provided
+            if vars_list and not is_positional:
                 for var_name in vars_list:
                     val = "Student" if "student" in var_name else ("Parent" if "parent" in var_name else "Selected")
                     parameters.append({

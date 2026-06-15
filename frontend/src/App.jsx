@@ -540,6 +540,10 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ template_name: name })
         });
+        setTemplatesList(prev => prev.map(t => ({
+          ...t,
+          is_active: t.template_name === name
+        })));
         triggerToast(`Active template switched to ${name}`, "success");
         fetchStats(name);
       } catch (err) {
