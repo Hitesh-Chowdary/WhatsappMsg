@@ -55,7 +55,7 @@ class BulkSendPayload(BaseModel):
     record_ids: List[int]
 
 # Background task for bulk message broadcasting
-async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppClient):
+async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppClient, base_url: Optional[str] = None):
     logger.info("Starting background campaign broadcast...")
     async with db_session_factory() as db:
         # Fetch the active template text
@@ -70,6 +70,8 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         )
         media_type = template_obj.media_type if template_obj else "none"
         media_url = template_obj.media_url if template_obj else None
+        if media_url and media_url.startswith("/") and base_url:
+            media_url = f"{base_url.rstrip('/')}{media_url}"
 
         # Fetch all pending records
         stmt = select(Record).where(Record.campaign_status == "Pending")
@@ -118,7 +120,7 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
             
     logger.info("Background campaign broadcast completed.")
 
-async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppClient, record_ids: List[int]):
+async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppClient, record_ids: List[int], base_url: Optional[str] = None):
     logger.info(f"Starting background bulk send campaign for {len(record_ids)} records...")
     async with db_session_factory() as db:
         # Fetch the active template text
@@ -133,6 +135,8 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         )
         media_type = template_obj.media_type if template_obj else "none"
         media_url = template_obj.media_url if template_obj else None
+        if media_url and media_url.startswith("/") and base_url:
+            media_url = f"{base_url.rstrip('/')}{media_url}"
 
         # Fetch records
         stmt = select(Record).where(Record.id.in_(record_ids))
@@ -579,6 +583,11 @@ async def upload_template_media(
         "full_url": f"http://localhost:8000/static/media/{safe_filename}"
     }
 
+def get_request_base_url(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
+    return f"{proto}://{host}"
+
 # Bulk Trigger Broadcast
 @app.post("/api/v1/campaign/broadcast")
 async def broadcast_campaign(
@@ -597,7 +606,8 @@ async def broadcast_campaign(
         
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
-    background_tasks.add_task(run_broadcast_campaign, AsyncSessionLocal, client)
+    base_url = get_request_base_url(request)
+    background_tasks.add_task(run_broadcast_campaign, AsyncSessionLocal, client, base_url)
     
     return {
         "status": "success",
@@ -626,7 +636,8 @@ async def send_bulk_campaign(
         
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
-    background_tasks.add_task(run_bulk_send_campaign, AsyncSessionLocal, client, payload.record_ids)
+    base_url = get_request_base_url(request)
+    background_tasks.add_task(run_bulk_send_campaign, AsyncSessionLocal, client, payload.record_ids, base_url)
     
     return {
         "status": "success",
@@ -662,6 +673,9 @@ async def send_single_message(
     )
     media_type = template_obj.media_type if template_obj else "none"
     media_url = template_obj.media_url if template_obj else None
+    base_url = get_request_base_url(request)
+    if media_url and media_url.startswith("/"):
+        media_url = f"{base_url.rstrip('/')}{media_url}"
 
     # Compile message text
     msg_body = template_text
