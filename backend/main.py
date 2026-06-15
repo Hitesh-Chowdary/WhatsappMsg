@@ -47,9 +47,15 @@ class SimulationPayload(BaseModel):
     target_state: str = Field(..., description="'delivered', 'read', 'failed', 'Interested', or 'Not Interested'")
 
 class TemplatePayload(BaseModel):
+    template_name: str = Field(..., description="Name of the template")
     template_text: str = Field(..., max_length=1000, description="Custom WhatsApp campaign template text.")
     media_type: Optional[str] = Field("none", description="'none', 'image', or 'document'")
     media_url: Optional[str] = Field(None, max_length=1000, description="URL of attached media")
+    language: Optional[str] = Field("en", description="Language code (e.g. 'en', 'en_US')")
+    variable_names: Optional[str] = Field("", description="Comma-separated variable names")
+
+class SetActiveTemplatePayload(BaseModel):
+    template_name: str = Field(..., description="Name of the template to set active")
 
 class BulkSendPayload(BaseModel):
     record_ids: List[int]
@@ -59,10 +65,17 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
     logger.info("Starting background campaign broadcast...")
     async with db_session_factory() as db:
         # Fetch the active template text
-        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
         tmpl_res = await db.execute(tmpl_stmt)
         template_obj = tmpl_res.scalar_one_or_none()
         
+        # Fallback to first if none active
+        if not template_obj:
+            tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+            tmpl_res = await db.execute(tmpl_stmt)
+            template_obj = tmpl_res.scalar_one_or_none()
+            
+        template_name = template_obj.template_name if template_obj else "admission_outreach"
         template_text = template_obj.template_text if template_obj else (
             "Dear [Parent Name], greetings from College Admissions. Your child [Student Name] "
             "has been selected for the [Selected Branch] branch. To block the seat, please pay the "
@@ -72,6 +85,8 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         media_url = template_obj.media_url if template_obj else None
         if media_url and media_url.startswith("/") and base_url:
             media_url = f"{base_url.rstrip('/')}{media_url}"
+        template_language = template_obj.language if template_obj else "en_US"
+        variable_names = template_obj.variable_names if template_obj else ""
 
         # Fetch all pending records
         stmt = select(Record).where(Record.campaign_status == "Pending")
@@ -100,10 +115,14 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                         "student_name": record.student_name,
                         "selected_branch": record.selected_branch,
                         "parent_name": record.parent_name
-                    }
+                    },
+                    template_name=template_name,
+                    template_language=template_language,
+                    variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
                 )
                 if response.get("status") == "success":
                     record.message_id = response.get("message_id")
+                    record.sent_template = template_name
                     record.campaign_status = "Sent"
                     record.delivery_status = "Sent"
                     record.sent_at = datetime.utcnow()
@@ -124,10 +143,17 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
     logger.info(f"Starting background bulk send campaign for {len(record_ids)} records...")
     async with db_session_factory() as db:
         # Fetch the active template text
-        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
         tmpl_res = await db.execute(tmpl_stmt)
         template_obj = tmpl_res.scalar_one_or_none()
         
+        # Fallback to first if none active
+        if not template_obj:
+            tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+            tmpl_res = await db.execute(tmpl_stmt)
+            template_obj = tmpl_res.scalar_one_or_none()
+            
+        template_name = template_obj.template_name if template_obj else "admission_outreach"
         template_text = template_obj.template_text if template_obj else (
             "Dear [Parent Name], greetings from College Admissions. Your child [Student Name] "
             "has been selected for the [Selected Branch] branch. To block the seat, please pay the "
@@ -137,6 +163,8 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         media_url = template_obj.media_url if template_obj else None
         if media_url and media_url.startswith("/") and base_url:
             media_url = f"{base_url.rstrip('/')}{media_url}"
+        template_language = template_obj.language if template_obj else "en_US"
+        variable_names = template_obj.variable_names if template_obj else ""
 
         # Fetch records
         stmt = select(Record).where(Record.id.in_(record_ids))
@@ -169,10 +197,14 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                         "student_name": record.student_name,
                         "selected_branch": record.selected_branch,
                         "parent_name": record.parent_name
-                    }
+                    },
+                    template_name=template_name,
+                    template_language=template_language,
+                    variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
                 )
                 if response.get("status") == "success":
                     record.message_id = response.get("message_id")
+                    record.sent_template = template_name
                     record.campaign_status = "Sent"
                     record.delivery_status = "Sent"
                     record.parent_response = "No Response"
@@ -502,10 +534,16 @@ async def get_active_template(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Retrieves the active WhatsApp message template from the database."""
-    stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+    stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
     result = await db.execute(stmt)
     template = result.scalar_one_or_none()
     
+    # Fallback to first if none active
+    if not template:
+        stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+        result = await db.execute(stmt)
+        template = result.scalar_one_or_none()
+        
     if not template:
         raise HTTPException(status_code=404, detail="Active template not configured in database.")
         
@@ -518,9 +556,12 @@ async def get_active_template(
             media_file_missing = True
             
     return {
+        "template_name": template.template_name,
         "template_text": template.template_text,
         "media_type": template.media_type or "none",
         "media_url": template.media_url,
+        "language": template.language,
+        "variable_names": template.variable_names,
         "media_file_missing": media_file_missing
     }
 
@@ -530,29 +571,246 @@ async def update_active_template(
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
-    """Saves or updates the active WhatsApp template in the database."""
-    stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+    """Saves or updates the specified WhatsApp template in the database."""
+    stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == payload.template_name)
     result = await db.execute(stmt)
     template = result.scalar_one_or_none()
     
     if not template:
         template = CampaignTemplate(
+            template_name=payload.template_name,
             template_text=payload.template_text,
             media_type=payload.media_type,
-            media_url=payload.media_url
+            media_url=payload.media_url,
+            language=payload.language or "en",
+            variable_names=payload.variable_names or ""
         )
         db.add(template)
     else:
         template.template_text = payload.template_text
         template.media_type = payload.media_type
         template.media_url = payload.media_url
+        if payload.language:
+            template.language = payload.language
+        if payload.variable_names is not None:
+            template.variable_names = payload.variable_names
         
     await db.commit()
     return {
         "status": "success", 
+        "template_name": template.template_name,
         "template_text": template.template_text,
         "media_type": template.media_type,
-        "media_url": template.media_url
+        "media_url": template.media_url,
+        "language": template.language,
+        "variable_names": template.variable_names
+    }
+
+@app.get("/api/v1/templates")
+async def get_all_templates(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves all campaign templates stored in the database."""
+    stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc())
+    result = await db.execute(stmt)
+    templates_list = result.scalars().all()
+    return [
+        {
+            "id": t.id,
+            "template_name": t.template_name,
+            "template_text": t.template_text,
+            "category": t.category,
+            "media_type": t.media_type or "none",
+            "media_url": t.media_url,
+            "language": t.language,
+            "variable_names": t.variable_names,
+            "is_active": t.is_active
+        }
+        for t in templates_list
+    ]
+
+@app.post("/api/v1/templates/active")
+async def set_active_template(
+    payload: SetActiveTemplatePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Marks the specified template as the active campaign template."""
+    # First set all to inactive
+    await db.execute(text("UPDATE campaign_templates SET is_active = false"))
+    
+    # Mark the specified one as active
+    stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == payload.template_name)
+    result = await db.execute(stmt)
+    template = result.scalar_one_or_none()
+    
+    if not template:
+        raise HTTPException(status_code=404, detail=f"Template '{payload.template_name}' not found.")
+        
+    template.is_active = True
+    await db.commit()
+    return {
+        "status": "success",
+        "active_template": template.template_name
+    }
+
+@app.post("/api/v1/templates/sync")
+async def sync_templates_from_meta(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Pulls message templates from Meta Cloud API (or mocks them) and syncs them to the database."""
+    client_type = request.headers.get("x-whatsapp-client-type") or os.getenv("WHATSAPP_CLIENT_TYPE", "mock")
+    
+    if client_type == "mock":
+        # Simulate syncing the three pre-approved templates
+        templates_data = [
+            {
+                "name": "parent_outreach",
+                "category": "MARKETING",
+                "language": "en",
+                "text": "*_Dr. RVR NRI INSTITUTE OF TECHNOLOGY_*\n\nDear {{parent_name}}, greetings from College Admissions. Your child {{student_name}} has been selected for the {{selected_branch}} branch. To block the seat, please pay the ₹50,000 advance fee. Click below to confirm",
+                "media_type": "image",
+                "media_url": "https://raw.githubusercontent.com/Hitesh-Chowdary/WhatsappMsg/main/frontend/static/media/logo.jpg",
+                "variable_names": "parent_name,student_name,selected_branch"
+            },
+            {
+                "name": "admission_outreach",
+                "category": "MARKETING",
+                "language": "en_US",
+                "text": "Dear {{student}}, thank you for choosing our college. Your admission status for {{status}} is confirmed.",
+                "media_type": "none",
+                "media_url": None,
+                "variable_names": "student,status"
+            },
+            {
+                "name": "demo",
+                "category": "MARKETING",
+                "language": "en",
+                "text": "Testing the message",
+                "media_type": "none",
+                "media_url": None,
+                "variable_names": ""
+            }
+        ]
+    else:
+        # Pull from actual Meta API
+        access_token = os.getenv("META_ACCESS_TOKEN")
+        business_account_id = os.getenv("META_BUSINESS_ACCOUNT_ID")
+        
+        if not access_token or not business_account_id:
+            raise HTTPException(status_code=400, detail="Meta business account details not configured in environment variables.")
+            
+        import httpx
+        url = f"https://graph.facebook.com/v25.0/{business_account_id}/message_templates"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.get(url, headers=headers, timeout=15.0)
+                if res.status_code != 200:
+                    raise HTTPException(status_code=res.status_code, detail=f"Meta template sync failed: {res.text}")
+                meta_data = res.json().get("data", [])
+        except Exception as e:
+            logger.error(f"Error fetching templates from Meta: {e}")
+            raise HTTPException(status_code=500, detail=f"Network error syncing templates: {str(e)}")
+            
+        templates_data = []
+        for item in meta_data:
+            # Parse only APPROVED templates
+            if item.get("status") != "APPROVED":
+                continue
+                
+            name = item.get("name")
+            category = item.get("category")
+            language = item.get("language")
+            
+            # Extract body text and header media type
+            components = item.get("components", [])
+            body_text = ""
+            media_type = "none"
+            
+            for comp in components:
+                comp_type = comp.get("type")
+                if comp_type == "BODY":
+                    body_text = comp.get("text", "")
+                elif comp_type == "HEADER":
+                    header_format = comp.get("format")
+                    if header_format in ["IMAGE", "DOCUMENT", "VIDEO"]:
+                        media_type = header_format.lower()
+                        
+            # Determine default variable names list based on text analysis or placeholders
+            if name == "parent_outreach":
+                variable_names = "parent_name,student_name,selected_branch"
+            elif name == "admission_outreach":
+                variable_names = "student,status"
+            else:
+                # Count placeholders (e.g. {{1}}, {{2}}...)
+                import re
+                placeholders = re.findall(r"\{\{(\d+)\}\}", body_text)
+                if placeholders:
+                    variable_names = ",".join([f"var_{p}" for p in placeholders])
+                else:
+                    variable_names = ""
+                    
+            templates_data.append({
+                "name": name,
+                "category": category,
+                "language": language,
+                "text": body_text,
+                "media_type": media_type,
+                "media_url": None,
+                "variable_names": variable_names
+            })
+            
+    # Save/upsert templates into local database
+    synced_count = 0
+    # Create session
+    for t in templates_data:
+        stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == t["name"])
+        res = await db.execute(stmt)
+        tmpl = res.scalar_one_or_none()
+        
+        if not tmpl:
+            tmpl = CampaignTemplate(
+                template_name=t["name"],
+                template_text=t["text"],
+                category=t["category"],
+                language=t["language"],
+                media_type=t["media_type"],
+                media_url=t["media_url"],
+                variable_names=t["variable_names"],
+                is_active=False
+            )
+            db.add(tmpl)
+        else:
+            tmpl.template_text = t["text"]
+            tmpl.category = t["category"]
+            tmpl.language = t["language"]
+            tmpl.media_type = t["media_type"]
+            tmpl.variable_names = t["variable_names"]
+            
+        synced_count += 1
+        
+    # Make sure at least one is active if none is active
+    stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True)
+    res = await db.execute(stmt)
+    active_t = res.scalar_one_or_none()
+    if not active_t:
+        stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc())
+        res = await db.execute(stmt)
+        first_t = res.scalar_one_or_none()
+        if first_t:
+            first_t.is_active = True
+            
+    await db.commit()
+        
+    return {
+        "status": "success",
+        "synced": synced_count,
+        "message": f"Successfully synced {synced_count} pre-approved templates from Meta."
     }
 
 @app.post("/api/v1/template/upload-media")
@@ -672,10 +930,17 @@ async def send_single_message(
         raise HTTPException(status_code=404, detail="Student record not found.")
         
     # Fetch active custom template
-    tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
     tmpl_res = await db.execute(tmpl_stmt)
     template_obj = tmpl_res.scalar_one_or_none()
     
+    # Fallback to first if none active
+    if not template_obj:
+        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalar_one_or_none()
+        
+    template_name = template_obj.template_name if template_obj else "admission_outreach"
     template_text = template_obj.template_text if template_obj else (
         "Dear [Parent Name], greetings from College Admissions. Your child [Student Name] "
         "has been selected for the [Selected Branch] branch. To block the seat, please pay the "
@@ -686,6 +951,8 @@ async def send_single_message(
     base_url = get_request_base_url(request)
     if media_url and media_url.startswith("/"):
         media_url = f"{base_url.rstrip('/')}{media_url}"
+    template_language = template_obj.language if template_obj else "en_US"
+    variable_names = template_obj.variable_names if template_obj else ""
 
     # Compile message text
     msg_body = template_text
@@ -709,10 +976,14 @@ async def send_single_message(
                 "student_name": record.student_name,
                 "selected_branch": record.selected_branch,
                 "parent_name": record.parent_name
-            }
+            },
+            template_name=template_name,
+            template_language=template_language,
+            variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
         )
         if response.get("status") == "success":
             record.message_id = response.get("message_id")
+            record.sent_template = template_name
             record.campaign_status = "Sent"
             record.delivery_status = "Sent"
             record.parent_response = "No Response"
@@ -963,6 +1234,7 @@ async def get_records_list(
     campaign_status: Optional[str] = None,
     responded: Optional[str] = None,
     branch: Optional[str] = None,
+    template: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
@@ -998,6 +1270,9 @@ async def get_records_list(
         
     if branch:
         stmt = stmt.where(Record.selected_branch.ilike(branch))
+        
+    if template and template != "All" and template != "all":
+        stmt = stmt.where(Record.sent_template == template)
         
     if campaign_status:
         stmt = stmt.where(Record.campaign_status.ilike(campaign_status))
@@ -1037,6 +1312,7 @@ async def export_records_to_excel(
     campaign_status: Optional[str] = None,
     responded: Optional[str] = None,
     branch: Optional[str] = None,
+    template: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
@@ -1073,6 +1349,9 @@ async def export_records_to_excel(
     if branch:
         stmt = stmt.where(Record.selected_branch.ilike(branch))
         
+    if template and template != "All" and template != "all":
+        stmt = stmt.where(Record.sent_template == template)
+        
     if campaign_status:
         stmt = stmt.where(Record.campaign_status.ilike(campaign_status))
         
@@ -1096,7 +1375,8 @@ async def export_records_to_excel(
             "Phone Number": r.phone_number,
             "Selected Branch": r.selected_branch,
             "Delivery Status": r.delivery_status,
-            "Parent Response": r.parent_response
+            "Parent Response": r.parent_response,
+            "Sent Template": r.sent_template or "N/A"
         })
         
     df = pd.DataFrame(data)

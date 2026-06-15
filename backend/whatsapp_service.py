@@ -21,7 +21,10 @@ class WhatsAppClient(abc.ABC):
         message_body: str,
         media_type: str = "none",
         media_url: str = None,
-        template_variables: Dict[str, str] = None
+        template_variables: Dict[str, str] = None,
+        template_name: str = None,
+        template_language: str = None,
+        variable_names: list = None
     ) -> Dict[str, Any]:
         """
         Send a WhatsApp template message (with optional media attachment) to a parent.
@@ -51,7 +54,10 @@ class MockWhatsAppClient(WhatsAppClient):
         message_body: str,
         media_type: str = "none",
         media_url: str = None,
-        template_variables: Dict[str, str] = None
+        template_variables: Dict[str, str] = None,
+        template_name: str = None,
+        template_language: str = None,
+        variable_names: list = None
     ) -> Dict[str, Any]:
         # Simulate slight network delay
         await asyncio.sleep(0.05)
@@ -96,7 +102,10 @@ class MetaWhatsAppClient(WhatsAppClient):
         message_body: str,
         media_type: str = "none",
         media_url: str = None,
-        template_variables: Dict[str, str] = None
+        template_variables: Dict[str, str] = None,
+        template_name: str = None,
+        template_language: str = None,
+        variable_names: list = None
     ) -> Dict[str, Any]:
         import os
         import httpx
@@ -116,18 +125,25 @@ class MetaWhatsAppClient(WhatsAppClient):
             "Content-Type": "application/json"
         }
         
+        # Use dynamic template configuration if supplied, else fall back to env variables
+        active_template_name = template_name or self.template_name
+        active_template_language = template_language or self.template_language
+        
         # Build components parameter array
         parameters = []
-        var_names_str = os.getenv("META_TEMPLATE_VARIABLE_NAMES")
-        if var_names_str:
-            var_names = [v.strip() for v in var_names_str.split(",") if v.strip()]
+        if variable_names is not None:
+            vars_list = variable_names
         else:
-            var_names = []
+            var_names_str = os.getenv("META_TEMPLATE_VARIABLE_NAMES")
+            if var_names_str:
+                vars_list = [v.strip() for v in var_names_str.split(",") if v.strip()]
+            else:
+                vars_list = []
 
         if template_variables:
-            if var_names:
+            if vars_list:
                 # Use named parameters based on the list
-                for var_name in var_names:
+                for var_name in vars_list:
                     val = template_variables.get(var_name)
                     if val is None:
                         # Fallback mappings for common names
@@ -154,8 +170,8 @@ class MetaWhatsAppClient(WhatsAppClient):
                         })
         else:
             # Fallback parsing from defaults
-            if var_names:
-                for var_name in var_names:
+            if vars_list:
+                for var_name in vars_list:
                     val = "Student" if "student" in var_name else ("Parent" if "parent" in var_name else "Selected")
                     parameters.append({
                         "type": "text",
@@ -210,9 +226,9 @@ class MetaWhatsAppClient(WhatsAppClient):
             "to": clean_phone,
             "type": "template",
             "template": {
-                "name": self.template_name,
+                "name": active_template_name,
                 "language": {
-                    "code": self.template_language
+                    "code": active_template_language
                 },
                 "components": components
             }

@@ -136,6 +136,9 @@ function App() {
   const [mediaFilename, setMediaFilename] = useState('');
   const [mediaUploading, setMediaUploading] = useState(false);
   const [mediaFileMissing, setMediaFileMissing] = useState(false);
+  const [templatesList, setTemplatesList] = useState([]);
+  const [selectedTemplateName, setSelectedTemplateName] = useState('');
+  const [templateFilter, setTemplateFilter] = useState('all');
   const [saveStatus, setSaveStatus] = useState('synced'); // synced, unsaved, saving
 
   // Uploader State
@@ -165,10 +168,10 @@ function App() {
   // LIFECYCLE & POLLING
   // ----------------------------------------------------
   // Keep latest filter, search, page state in a ref to avoid stale closures in the polling interval
-  const pollingStateRef = useRef({ currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter });
+  const pollingStateRef = useRef({ currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter });
   useEffect(() => {
-    pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter };
-  }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter]);
+    pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter };
+  }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter]);
 
   // ----------------------------------------------------
   // LIFECYCLE & POLLING
@@ -178,9 +181,9 @@ function App() {
     
     // Initial fetch
     fetchStats();
-    fetchTemplate();
+    fetchTemplatesList(true);
     fetchBranches();
-    fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter);
+    fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
 
     // Poll statistics and grid periodically to pick up async background sends
     const interval = setInterval(() => {
@@ -194,6 +197,7 @@ function App() {
         pollingStateRef.current.responseFilter, 
         pollingStateRef.current.search, 
         pollingStateRef.current.branchFilter, 
+        pollingStateRef.current.templateFilter,
         false
       ); // silent refresh without full loader
     }, 6000);
@@ -230,8 +234,8 @@ function App() {
   useEffect(() => {
     if (!token) return;
     setCurrentPage(1);
-    fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter);
-  }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, token]);
+    fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
+  }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, templateFilter, token]);
 
   // Handle search changes with 300ms debounce
   useEffect(() => {
@@ -240,7 +244,7 @@ function App() {
     
     searchTimeoutRef.current = setTimeout(() => {
       setCurrentPage(1);
-      fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter);
+      fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
     }, 300);
 
     return () => clearTimeout(searchTimeoutRef.current);
@@ -249,7 +253,7 @@ function App() {
   // Reset selected checkboxes on filter/search or page change
   useEffect(() => {
     setSelectedRecordIds([]);
-  }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, search, currentPage]);
+  }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, templateFilter, search, currentPage]);
 
   // Scroll sandbox logs to bottom
   useEffect(() => {
@@ -311,6 +315,10 @@ function App() {
     
     if (branchFilter && branchFilter !== 'all') {
       params.append('branch', branchFilter);
+    }
+
+    if (templateFilter && templateFilter !== 'all') {
+      params.append('template', templateFilter);
     }
     
     try {
@@ -392,7 +400,7 @@ function App() {
   };
 
   // Fetch paginated grid records
-  const fetchRecords = async (page, dispatchF, deliveryF, readF, responseF, searchTerm, branchF, showLoader = true) => {
+  const fetchRecords = async (page, dispatchF, deliveryF, readF, responseF, searchTerm, branchF, templateF, showLoader = true) => {
     if (showLoader) setGridLoading(true);
     
     const params = new URLSearchParams();
@@ -403,6 +411,10 @@ function App() {
     
     if (branchF && branchF !== 'all') {
       params.append('branch', branchF);
+    }
+
+    if (templateF && templateF !== 'all') {
+      params.append('template', templateF);
     }
 
     // Level 1: Dispatch
@@ -458,26 +470,95 @@ function App() {
     }
   };
 
-  // Fetch template text
-  const fetchTemplate = async () => {
+  // Fetch templates list
+  const fetchTemplatesList = async (selectActive = false) => {
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/template`);
+      const res = await authFetch(`${API_BASE}/api/v1/templates`);
       if (!res.ok) throw new Error();
       const data = await res.json();
-      setTemplateText(data.template_text);
-      setMediaType(data.media_type || 'none');
-      setMediaUrl(data.media_url || null);
-      setMediaFileMissing(data.media_file_missing || false);
-      if (data.media_url) {
-        const parts = data.media_url.split('/');
+      setTemplatesList(data);
+      
+      if (selectActive) {
+        const active = data.find(t => t.is_active);
+        if (active) {
+          setSelectedTemplateName(active.template_name);
+          setTemplateText(active.template_text);
+          setMediaType(active.media_type || 'none');
+          setMediaUrl(active.media_url || null);
+          setMediaFileMissing(active.media_file_missing || false);
+          if (active.media_url) {
+            const parts = active.media_url.split('/');
+            setMediaFilename(parts[parts.length - 1]);
+          } else {
+            setMediaFilename('');
+          }
+        } else if (data.length > 0) {
+          setSelectedTemplateName(data[0].template_name);
+          setTemplateText(data[0].template_text);
+          setMediaType(data[0].media_type || 'none');
+          setMediaUrl(data[0].media_url || null);
+          setMediaFileMissing(data[0].media_file_missing || false);
+          if (data[0].media_url) {
+            const parts = data[0].media_url.split('/');
+            setMediaFilename(parts[parts.length - 1]);
+          } else {
+            setMediaFilename('');
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error loading templates list:", err);
+    }
+  };
+
+  const handleTemplateChange = async (name) => {
+    setSelectedTemplateName(name);
+    const tmpl = templatesList.find(t => t.template_name === name);
+    if (tmpl) {
+      setTemplateText(tmpl.template_text);
+      setMediaType(tmpl.media_type || 'none');
+      setMediaUrl(tmpl.media_url || null);
+      setMediaFileMissing(tmpl.media_file_missing || false);
+      if (tmpl.media_url) {
+        const parts = tmpl.media_url.split('/');
         setMediaFilename(parts[parts.length - 1]);
       } else {
         setMediaFilename('');
       }
       setSaveStatus('synced');
+      
+      try {
+        await authFetch(`${API_BASE}/api/v1/templates/active`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ template_name: name })
+        });
+        triggerToast(`Active template switched to ${name}`, "success");
+      } catch (err) {
+        console.error("Error updating active template:", err);
+        triggerToast("Failed to update active template selection.", "error");
+      }
+    }
+  };
+
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
+  const handleSyncTemplates = async () => {
+    setSyncingTemplates(true);
+    triggerToast("Syncing approved templates from Meta...", "info");
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/templates/sync`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to sync templates.");
+      
+      triggerToast(data.message || "Templates synced successfully.", "success");
+      await fetchTemplatesList(true);
     } catch (err) {
       console.error(err);
-      triggerToast("Error loading outreach template from database.", "error");
+      triggerToast(err.message || "Error syncing templates.", "error");
+    } finally {
+      setSyncingTemplates(false);
     }
   };
 
@@ -493,6 +574,7 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
+          template_name: selectedTemplateName,
           template_text: templateText,
           media_type: mediaType,
           media_url: mediaUrl
@@ -501,10 +583,15 @@ function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to save template.");
       
-      setTemplateText(data.template_text);
-      setMediaType(data.media_type || 'none');
-      setMediaUrl(data.media_url || null);
-      setMediaFileMissing(false);
+      // Update local templates list
+      setTemplatesList(prev => prev.map(t => t.template_name === selectedTemplateName ? {
+        ...t,
+        template_text: data.template_text,
+        media_type: data.media_type,
+        media_url: data.media_url,
+        media_file_missing: false
+      } : t));
+      
       setSaveStatus('synced');
       triggerToast("Template saved successfully.", "success");
     } catch (err) {
@@ -723,6 +810,8 @@ function App() {
       pollingStateRef.current.readFilter, 
       pollingStateRef.current.responseFilter, 
       pollingStateRef.current.search, 
+      pollingStateRef.current.branchFilter,
+      pollingStateRef.current.templateFilter,
       false
     );
   };
@@ -797,7 +886,7 @@ function App() {
     const target = currentPage + dir;
     if (target >= 1 && target <= totalPages) {
       setCurrentPage(target);
-      fetchRecords(target, dispatchFilter, deliveryFilter, readFilter, responseFilter, search);
+      fetchRecords(target, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
     }
   };
 
@@ -1109,8 +1198,16 @@ function App() {
 
           {/* Campaign Controls (Right Side - Customizable Template) */}
           <div className="glass-panel campaign-panel">
-            <div className="panel-header">
+            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h4>Campaign Control Center</h4>
+              <button 
+                onClick={handleSyncTemplates} 
+                className="btn btn-secondary btn-sm" 
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                disabled={syncingTemplates}
+              >
+                {syncingTemplates ? 'Syncing...' : '🔄 Sync Templates'}
+              </button>
             </div>
             
             {mediaFileMissing && mediaType !== 'none' && (
@@ -1137,15 +1234,48 @@ function App() {
             
             <div className="campaign-desc-container">
               <div className="template-editor-group">
-                <div className="editor-header">
-                  <label htmlFor="template-editor-textarea" className="editor-label">Outreach Message Body Template</label>
+                <div className="editor-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <label htmlFor="template-selector" className="editor-label" style={{ marginBottom: 0 }}>Template:</label>
+                    <select
+                      id="template-selector"
+                      className="form-control"
+                      style={{
+                        padding: '0.25rem 0.5rem',
+                        fontSize: '0.85rem',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        color: 'var(--color-text)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '4px',
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                      value={selectedTemplateName}
+                      onChange={(e) => handleTemplateChange(e.target.value)}
+                    >
+                      {templatesList.map(t => (
+                        <option key={t.template_name} value={t.template_name} style={{ background: '#1a1a2e', color: 'var(--color-text)' }}>
+                          {t.template_name}
+                        </option>
+                      ))}
+                    </select>
+                    {templatesList.find(t => t.template_name === selectedTemplateName)?.is_active ? (
+                      <span style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem', borderRadius: '4px', background: 'rgba(46, 204, 113, 0.2)', color: '#2ecc71', border: '1px solid rgba(46, 204, 113, 0.4)' }}>
+                        Active
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem', borderRadius: '4px', background: 'rgba(241, 196, 15, 0.2)', color: '#f1c40f', border: '1px solid rgba(241, 196, 15, 0.4)' }}>
+                        Inactive
+                      </span>
+                    )}
+                  </div>
                   <button 
                     onClick={handleSaveTemplate} 
                     className="btn btn-secondary btn-sm" 
                     style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
                     disabled={saveStatus === 'saving'}
                   >
-                    {saveStatus === 'saving' ? 'Saving...' : 'Save Template'}
+                    {saveStatus === 'saving' ? 'Saving...' : 'Save Media Settings'}
                   </button>
                 </div>
                 
@@ -1155,45 +1285,21 @@ function App() {
                   rows={4} 
                   placeholder="Dear [Parent Name], your child [Student Name]..."
                   value={templateText}
-                  onChange={(e) => { setTemplateText(e.target.value); setSaveStatus('unsaved'); }}
+                  readOnly={true}
+                  style={{ backgroundColor: 'rgba(0, 0, 0, 0.25)', color: 'var(--color-text-muted)', cursor: 'not-allowed' }}
                 />
                 
-                <div className="editor-help-text">
-                  Available Tokens (Click to insert): {' '}
-                  <span className="placeholder-tag" onClick={() => insertToken('[Parent Name]')} title="Maps parent name column">[Parent Name]</span>{' '}
-                  <span className="placeholder-tag" onClick={() => insertToken('[Student Name]')} title="Maps student name column">[Student Name]</span>{' '}
-                  <span className="placeholder-tag" onClick={() => insertToken('[Selected Branch]')} title="Maps selected branch column">[Selected Branch]</span>{' '}
-                  <span className="placeholder-tag" onClick={() => insertToken('[Phone Number]')} title="Maps phone number">[Phone Number]</span>
+                <div className="editor-help-text" style={{ opacity: 0.7 }}>
+                  ⚠️ Meta templates are pre-approved and read-only.
                 </div>
 
                 {/* Media Attachment Selector */}
-                <div className="media-selector-group" style={{ marginTop: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
-                  <span className="editor-label" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.75rem' }}>Outreach Media Attachment</span>
-                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                    <button 
-                      type="button" 
-                      className={`btn btn-sm ${mediaType === 'none' ? 'btn-primary' : 'btn-secondary'}`}
-                      onClick={() => { setMediaType('none'); setMediaUrl(null); setMediaFilename(''); setSaveStatus('unsaved'); }}
-                    >
-                      None
-                    </button>
-                    <button 
-                      type="button" 
-                      className={`btn btn-sm ${mediaType === 'image' ? 'btn-primary' : 'btn-secondary'}`}
-                      onClick={() => { setMediaType('image'); setSaveStatus('unsaved'); }}
-                    >
-                      Image (PNG/JPG)
-                    </button>
-                    <button 
-                      type="button" 
-                      className={`btn btn-sm ${mediaType === 'document' ? 'btn-primary' : 'btn-secondary'}`}
-                      onClick={() => { setMediaType('document'); setSaveStatus('unsaved'); }}
-                    >
-                      Document (PDF)
-                    </button>
-                  </div>
+                {mediaType !== 'none' && (
+                  <div className="media-selector-group" style={{ marginTop: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
+                    <span className="editor-label" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.75rem' }}>
+                      Outreach Media Attachment ({mediaType === 'image' ? 'Image Required' : 'Document Required'})
+                    </span>
 
-                  {mediaType !== 'none' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       {!mediaUrl ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1238,8 +1344,8 @@ function App() {
                         style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem' }}
                       />
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
               
               <div className="message-preview">
@@ -1369,6 +1475,20 @@ function App() {
                   ))}
                 </select>
               </div>
+
+              <div className="filter-group">
+                <span className="filter-label">Template</span>
+                <select 
+                  value={templateFilter} 
+                  onChange={(e) => setTemplateFilter(e.target.value)} 
+                  className="filter-select"
+                >
+                  <option value="all">All Templates</option>
+                  {templatesList.map((t) => (
+                    <option key={t.template_name} value={t.template_name}>{t.template_name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="grid-header-actions" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1466,6 +1586,7 @@ function App() {
                   <th>Student Details</th>
                   <th>Parent Details</th>
                   <th>Branch</th>
+                  <th>Sent Template</th>
                   <th>Phone Number</th>
                   <th>Delivery Status</th>
                   <th>Response</th>
@@ -1475,7 +1596,7 @@ function App() {
               <tbody>
                 {gridLoading ? (
                   <tr className="state-loading">
-                    <td colSpan={8}>
+                    <td colSpan={9}>
                       <div className="loading-spinner-container">
                         <div className="spinner"></div>
                         <span>Loading records...</span>
@@ -1484,21 +1605,21 @@ function App() {
                   </tr>
                 ) : gridError ? (
                   <tr className="state-empty">
-                    <td colSpan={8}>
+                    <td colSpan={9}>
                       <div className="empty-container">
-                        <svg class="empty-icon text-coral" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <svg className="empty-icon text-coral" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
                           <line x1="12" y1="9" x2="12" y2="13"></line>
                           <line x1="12" y1="17" x2="12.01" y2="17"></line>
                         </svg>
-                        <span class="empty-title text-coral">Data Query Failed</span>
-                        <span class="empty-desc">{gridError}</span>
+                        <span className="empty-title text-coral">Data Query Failed</span>
+                        <span className="empty-desc">{gridError}</span>
                       </div>
                     </td>
                   </tr>
                 ) : records.length === 0 ? (
                   <tr className="state-empty">
-                    <td colSpan={8}>
+                    <td colSpan={9}>
                       <div className="empty-container">
                         <svg className="empty-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                           <circle cx="12" cy="12" r="10"></circle>
@@ -1506,7 +1627,7 @@ function App() {
                           <line x1="12" y1="16" x2="12.01" y2="16"></line>
                         </svg>
                         <span className="empty-title">No Records Found</span>
-                        <span class="empty-desc">Upload an Excel or adjust filters to populate contacts.</span>
+                        <span className="empty-desc">Upload an Excel or adjust filters to populate contacts.</span>
                       </div>
                     </td>
                   </tr>
@@ -1554,6 +1675,11 @@ function App() {
                         </td>
                         <td>
                           <span className="cell-title">{rec.selected_branch}</span>
+                        </td>
+                        <td>
+                          <span className="cell-title" style={{ fontSize: '0.8rem', opacity: rec.sent_template ? 1 : 0.5 }}>
+                            {rec.sent_template || '—'}
+                          </span>
                         </td>
                         <td>
                           <span className="cell-title">+{rec.phone_number}</span>

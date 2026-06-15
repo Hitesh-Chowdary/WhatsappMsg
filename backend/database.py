@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
-from sqlalchemy import String, DateTime, func, text
+from sqlalchemy import String, DateTime, func, text, Boolean
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -60,6 +60,9 @@ class Record(Base):
     # Message Tracking ID from WhatsApp API
     message_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
     
+    # Template name used for dispatching
+    sent_template: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
     # Timestamps
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -83,6 +86,7 @@ class Record(Base):
             "delivery_status": self.delivery_status,
             "parent_response": self.parent_response,
             "message_id": self.message_id,
+            "sent_template": self.sent_template,
             "sent_at": self.sent_at.isoformat() if self.sent_at else None,
             "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
             "read_at": self.read_at.isoformat() if self.read_at else None,
@@ -94,9 +98,14 @@ class CampaignTemplate(Base):
     __tablename__ = "campaign_templates"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    template_name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     template_text: Mapped[str] = mapped_column(String(1000), nullable=False)
+    category: Mapped[str] = mapped_column(String(100), default="MARKETING", server_default="MARKETING")
     media_type: Mapped[Optional[str]] = mapped_column(String(50), default="none", server_default="none", nullable=True)
     media_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    language: Mapped[str] = mapped_column(String(50), default="en", server_default="en")
+    variable_names: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
         server_default=func.now(),
@@ -116,26 +125,83 @@ async def init_db():
     async with engine.begin() as conn:
         # Create all tables in the database if they do not exist
         await conn.run_sync(Base.metadata.create_all)
-        # Apply columns dynamically for media attachments if missing
+        # Apply columns dynamically for compatibility
         await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS media_type VARCHAR(50) DEFAULT 'none'"))
         await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS media_url VARCHAR(1000)"))
+        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS template_name VARCHAR(255)"))
+        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'MARKETING'"))
+        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS language VARCHAR(50) DEFAULT 'en'"))
+        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS variable_names VARCHAR(500)"))
+        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT false"))
+        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS sent_template VARCHAR(255)"))
         
-    # Seed default template if empty
+    # Seed default templates if empty
     async with AsyncSessionLocal() as session:
         from sqlalchemy import select
-        stmt = select(CampaignTemplate).limit(1)
-        result = await session.execute(stmt)
-        template = result.scalar_one_or_none()
         
-        if not template:
-            default_text = (
-                "Dear [Parent Name], greetings from College Admissions. Your child [Student Name] "
-                "has been selected for the [Selected Branch] branch. To block the seat, please pay "
-                "the ₹50,000 advance fee. Click below to confirm interest: [Interested] / [Not Interested]"
+        # 1. Clean up any template row without template_name (or rename it to 'parent_outreach')
+        await session.execute(text("UPDATE campaign_templates SET template_name = 'parent_outreach' WHERE template_name IS NULL"))
+        await session.commit()
+        
+        # 2. Seed the required templates
+        templates_to_seed = [
+            (
+                "parent_outreach",
+                "*_Dr. RVR NRI INSTITUTE OF TECHNOLOGY_*\n\nDear {{parent_name}}, greetings from College Admissions. Your child {{student_name}} has been selected for the {{selected_branch}} branch. To block the seat, please pay the ₹50,000 advance fee. Click below to confirm",
+                "en",
+                "MARKETING",
+                "parent_name,student_name,selected_branch",
+                "image",
+                "https://raw.githubusercontent.com/Hitesh-Chowdary/WhatsappMsg/main/frontend/static/media/logo.jpg",
+                True
+            ),
+            (
+                "demo",
+                "Testing the message",
+                "en",
+                "MARKETING",
+                "",
+                "none",
+                None,
+                False
+            ),
+            (
+                "admission_outreach",
+                "Dear {{student}}, thank you for choosing our college. Your admission status for {{status}} is confirmed.",
+                "en_US",
+                "MARKETING",
+                "student,status",
+                "none",
+                None,
+                False
             )
-            default_template = CampaignTemplate(template_text=default_text)
-            session.add(default_template)
-            await session.commit()
+        ]
+        
+        for name, text_val, lang, cat, vars_val, media_t, media_u, active in templates_to_seed:
+            stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == name)
+            res = await session.execute(stmt)
+            t = res.scalar_one_or_none()
+            
+            if not t:
+                new_t = CampaignTemplate(
+                    template_name=name,
+                    template_text=text_val,
+                    category=cat,
+                    language=lang,
+                    variable_names=vars_val,
+                    media_type=media_t,
+                    media_url=media_u,
+                    is_active=active
+                )
+                session.add(new_t)
+            else:
+                t.category = cat
+                t.language = lang
+                t.variable_names = vars_val
+                if active:
+                    t.is_active = True
+                    
+        await session.commit()
 
     # Seed default admin user
     async with AsyncSessionLocal() as session:
