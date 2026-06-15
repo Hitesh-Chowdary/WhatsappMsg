@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
-from sqlalchemy import String, DateTime, func, text, Boolean
+from sqlalchemy import String, DateTime, func, text, Boolean, ForeignKey
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -87,6 +87,45 @@ class Record(Base):
             "parent_response": self.parent_response,
             "message_id": self.message_id,
             "sent_template": self.sent_template,
+            "sent_at": self.sent_at.isoformat() if self.sent_at else None,
+            "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
+            "read_at": self.read_at.isoformat() if self.read_at else None,
+            "responded_at": self.responded_at.isoformat() if self.responded_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+class CampaignLog(Base):
+    __tablename__ = "campaign_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("records.id", ondelete="CASCADE"), nullable=False, index=True)
+    template_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    
+    campaign_status: Mapped[str] = mapped_column(String(50), default="Pending")
+    delivery_status: Mapped[str] = mapped_column(String(50), default="Unsent")
+    parent_response: Mapped[str] = mapped_column(String(50), default="No Response")
+    
+    message_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "record_id": self.record_id,
+            "template_name": self.template_name,
+            "campaign_status": self.campaign_status,
+            "delivery_status": self.delivery_status,
+            "parent_response": self.parent_response,
+            "message_id": self.message_id,
             "sent_at": self.sent_at.isoformat() if self.sent_at else None,
             "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
             "read_at": self.read_at.isoformat() if self.read_at else None,
@@ -224,6 +263,34 @@ async def init_db():
         else:
             admin_user.hashed_password = hashed
             
+        await session.commit()
+
+        # Migrate legacy records to campaign_logs
+        stmt = select(Record).where(Record.sent_template != None)
+        res = await session.execute(stmt)
+        legacy_records = res.scalars().all()
+        for r in legacy_records:
+            log_stmt = select(CampaignLog).where(
+                CampaignLog.record_id == r.id,
+                CampaignLog.template_name == r.sent_template
+            )
+            log_res = await session.execute(log_stmt)
+            log_obj = log_res.scalars().first()
+            if not log_obj:
+                new_log = CampaignLog(
+                    record_id=r.id,
+                    template_name=r.sent_template,
+                    campaign_status=r.campaign_status,
+                    delivery_status=r.delivery_status,
+                    parent_response=r.parent_response,
+                    message_id=r.message_id,
+                    sent_at=r.sent_at,
+                    delivered_at=r.delivered_at,
+                    read_at=r.read_at,
+                    responded_at=r.responded_at,
+                    created_at=r.sent_at or r.created_at
+                )
+                session.add(new_log)
         await session.commit()
 
 async def get_db():

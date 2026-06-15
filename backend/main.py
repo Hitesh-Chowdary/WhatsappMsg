@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 import pandas as pd
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Setup path logic to ensure clean imports when running from root or backend folder
@@ -23,7 +23,7 @@ PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 if BACKEND_DIR not in sys.path:
     sys.path.append(BACKEND_DIR)
 
-from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser
+from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser, CampaignLog
 from whatsapp_service import get_whatsapp_client, WhatsAppClient
 
 # Configure logging
@@ -67,13 +67,13 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         # Fetch the active template text
         tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
         tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalar_one_or_none()
+        template_obj = tmpl_res.scalars().first()
         
         # Fallback to first if none active
         if not template_obj:
             tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
             tmpl_res = await db.execute(tmpl_stmt)
-            template_obj = tmpl_res.scalar_one_or_none()
+            template_obj = tmpl_res.scalars().first()
             
         template_name = template_obj.template_name if template_obj else "admission_outreach"
         template_text = template_obj.template_text if template_obj else (
@@ -88,13 +88,43 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         template_language = template_obj.language if template_obj else "en_US"
         variable_names = template_obj.variable_names if template_obj else ""
 
-        # Fetch all pending records
-        stmt = select(Record).where(Record.campaign_status == "Pending")
+        # Fetch all eligible records (no sent CampaignLog for this template)
+        stmt = select(Record).outerjoin(
+            CampaignLog,
+            and_(
+                CampaignLog.record_id == Record.id,
+                CampaignLog.template_name == template_name
+            )
+        ).where(
+            or_(
+                CampaignLog.id == None,
+                CampaignLog.campaign_status.in_(["Pending", "Failed"])
+            )
+        )
         result = await db.execute(stmt)
         pending_records = result.scalars().all()
         
         logger.info(f"Found {len(pending_records)} pending records to send.")
         for record in pending_records:
+            # Skip if confirmed Interested on this template
+            log_stmt = select(CampaignLog).where(
+                CampaignLog.record_id == record.id,
+                CampaignLog.template_name == template_name
+            )
+            log_res = await db.execute(log_stmt)
+            log_obj = log_res.scalars().first()
+            if log_obj and log_obj.parent_response == "Interested":
+                continue
+
+            if not log_obj:
+                log_obj = CampaignLog(
+                    record_id=record.id,
+                    template_name=template_name,
+                    campaign_status="Pending",
+                    delivery_status="Unsent"
+                )
+                db.add(log_obj)
+
             try:
                 # Compile template variables dynamically
                 msg_body = template_text
@@ -121,18 +151,21 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
                 )
                 if response.get("status") == "success":
-                    record.message_id = response.get("message_id")
-                    record.sent_template = template_name
-                    record.campaign_status = "Sent"
-                    record.delivery_status = "Sent"
-                    record.sent_at = datetime.utcnow()
+                    log_obj.message_id = response.get("message_id")
+                    log_obj.campaign_status = "Sent"
+                    log_obj.delivery_status = "Sent"
+                    log_obj.parent_response = "No Response"
+                    log_obj.sent_at = datetime.utcnow()
+                    log_obj.delivered_at = None
+                    log_obj.read_at = None
+                    log_obj.responded_at = None
                 else:
-                    record.campaign_status = "Failed"
-                    record.delivery_status = "Failed"
+                    log_obj.campaign_status = "Failed"
+                    log_obj.delivery_status = "Failed"
             except Exception as e:
                 logger.error(f"Error broadcasting to {record.phone_number} (ID: {record.id}): {e}")
-                record.campaign_status = "Failed"
-                record.delivery_status = "Failed"
+                log_obj.campaign_status = "Failed"
+                log_obj.delivery_status = "Failed"
             
             # Commit after each message to update the database states in real-time
             await db.commit()
@@ -145,13 +178,13 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         # Fetch the active template text
         tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
         tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalar_one_or_none()
+        template_obj = tmpl_res.scalars().first()
         
         # Fallback to first if none active
         if not template_obj:
             tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
             tmpl_res = await db.execute(tmpl_stmt)
-            template_obj = tmpl_res.scalar_one_or_none()
+            template_obj = tmpl_res.scalars().first()
             
         template_name = template_obj.template_name if template_obj else "admission_outreach"
         template_text = template_obj.template_text if template_obj else (
@@ -172,11 +205,28 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         records = result.scalars().all()
         
         for record in records:
-            # Skip if confirmed Interested (outbox safeguard)
-            if record.parent_response == "Interested":
+            # Check CampaignLog status
+            log_stmt = select(CampaignLog).where(
+                CampaignLog.record_id == record.id,
+                CampaignLog.template_name == template_name
+            )
+            log_res = await db.execute(log_stmt)
+            log_obj = log_res.scalars().first()
+            
+            # Skip if confirmed Interested
+            if log_obj and log_obj.parent_response == "Interested":
                 logger.info(f"Skipping record ID {record.id} because parent is Interested.")
                 continue
                 
+            if not log_obj:
+                log_obj = CampaignLog(
+                    record_id=record.id,
+                    template_name=template_name,
+                    campaign_status="Pending",
+                    delivery_status="Unsent"
+                )
+                db.add(log_obj)
+
             try:
                 # Compile template variables dynamically
                 msg_body = template_text
@@ -203,23 +253,23 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
                 )
                 if response.get("status") == "success":
-                    record.message_id = response.get("message_id")
-                    record.sent_template = template_name
-                    record.campaign_status = "Sent"
-                    record.delivery_status = "Sent"
-                    record.parent_response = "No Response"
-                    record.sent_at = datetime.utcnow()
-                    record.delivered_at = None
-                    record.read_at = None
-                    record.responded_at = None
+                    log_obj.message_id = response.get("message_id")
+                    log_obj.campaign_status = "Sent"
+                    log_obj.delivery_status = "Sent"
+                    log_obj.parent_response = "No Response"
+                    log_obj.sent_at = datetime.utcnow()
+                    log_obj.delivered_at = None
+                    log_obj.read_at = None
+                    log_obj.responded_at = None
                 else:
-                    record.campaign_status = "Failed"
-                    record.delivery_status = "Failed"
+                    log_obj.campaign_status = "Failed"
+                    log_obj.delivery_status = "Failed"
             except Exception as e:
                 logger.error(f"Error bulk dispatching to {record.phone_number} (ID: {record.id}): {e}")
-                record.campaign_status = "Failed"
-                record.delivery_status = "Failed"
+                log_obj.campaign_status = "Failed"
+                log_obj.delivery_status = "Failed"
             
+            # Commit after each message to update database status in real-time
             await db.commit()
             
     logger.info("Background bulk send campaign completed.")
@@ -867,7 +917,28 @@ async def broadcast_campaign(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Launches the broadcast campaign for all Pending records in the background."""
-    stmt = select(func.count(Record.id)).where(Record.campaign_status == "Pending")
+    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+    tmpl_res = await db.execute(tmpl_stmt)
+    template_obj = tmpl_res.scalars().first()
+    if not template_obj:
+        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+        
+    template_name = template_obj.template_name if template_obj else "admission_outreach"
+
+    stmt = select(func.count(Record.id)).outerjoin(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == template_name
+        )
+    ).where(
+        or_(
+            CampaignLog.id == None,
+            CampaignLog.campaign_status.in_(["Pending", "Failed"])
+        )
+    )
     result = await db.execute(stmt)
     pending_count = result.scalar() or 0
     
@@ -894,9 +965,27 @@ async def send_bulk_campaign(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Triggers WhatsApp messages to a specific list of contact IDs in the background."""
-    stmt = select(func.count(Record.id)).where(
+    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+    tmpl_res = await db.execute(tmpl_stmt)
+    template_obj = tmpl_res.scalars().first()
+    if not template_obj:
+        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+    template_name = template_obj.template_name if template_obj else "admission_outreach"
+
+    stmt = select(func.count(Record.id)).outerjoin(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == template_name
+        )
+    ).where(
         Record.id.in_(payload.record_ids),
-        Record.parent_response != "Interested"
+        or_(
+            CampaignLog.id == None,
+            CampaignLog.parent_response != "Interested"
+        )
     )
     result = await db.execute(stmt)
     eligible_count = result.scalar() or 0
@@ -934,13 +1023,13 @@ async def send_single_message(
     # Fetch active custom template
     tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
     tmpl_res = await db.execute(tmpl_stmt)
-    template_obj = tmpl_res.scalar_one_or_none()
+    template_obj = tmpl_res.scalars().first()
     
     # Fallback to first if none active
     if not template_obj:
         tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
         tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalar_one_or_none()
+        template_obj = tmpl_res.scalars().first()
         
     template_name = template_obj.template_name if template_obj else "admission_outreach"
     template_text = template_obj.template_text if template_obj else (
@@ -963,6 +1052,22 @@ async def send_single_message(
     msg_body = msg_body.replace("[Selected Branch]", record.selected_branch)
     msg_body = msg_body.replace("[Phone Number]", record.phone_number)
 
+    # Find or create CampaignLog for single dispatch
+    log_stmt = select(CampaignLog).where(
+        CampaignLog.record_id == record.id,
+        CampaignLog.template_name == template_name
+    )
+    log_res = await db.execute(log_stmt)
+    log_obj = log_res.scalars().first()
+    if not log_obj:
+        log_obj = CampaignLog(
+            record_id=record.id,
+            template_name=template_name,
+            campaign_status="Pending",
+            delivery_status="Unsent"
+        )
+        db.add(log_obj)
+
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
     try:
@@ -984,30 +1089,42 @@ async def send_single_message(
             variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
         )
         if response.get("status") == "success":
-            record.message_id = response.get("message_id")
-            record.sent_template = template_name
-            record.campaign_status = "Sent"
-            record.delivery_status = "Sent"
-            record.parent_response = "No Response"
-            record.sent_at = datetime.utcnow()
-            record.delivered_at = None
-            record.read_at = None
-            record.responded_at = None
+            log_obj.message_id = response.get("message_id")
+            log_obj.campaign_status = "Sent"
+            log_obj.delivery_status = "Sent"
+            log_obj.parent_response = "No Response"
+            log_obj.sent_at = datetime.utcnow()
+            log_obj.delivered_at = None
+            log_obj.read_at = None
+            log_obj.responded_at = None
             await db.commit()
+            
+            # Construct a record dict with template status overridden
+            record_dict = record.to_dict()
+            record_dict["campaign_status"] = log_obj.campaign_status
+            record_dict["delivery_status"] = log_obj.delivery_status
+            record_dict["parent_response"] = log_obj.parent_response
+            record_dict["message_id"] = log_obj.message_id
+            record_dict["sent_template"] = log_obj.template_name
+            record_dict["sent_at"] = log_obj.sent_at.isoformat() if log_obj.sent_at else None
+            record_dict["delivered_at"] = None
+            record_dict["read_at"] = None
+            record_dict["responded_at"] = None
+            
             return {
                 "status": "success",
                 "message": f"Message sent to {record.parent_name}.",
-                "record": record.to_dict()
+                "record": record_dict
             }
         else:
-            record.campaign_status = "Failed"
-            record.delivery_status = "Failed"
+            log_obj.campaign_status = "Failed"
+            log_obj.delivery_status = "Failed"
             await db.commit()
             raise HTTPException(status_code=500, detail="WhatsApp gateway failed to send message.")
     except Exception as e:
         logger.error(f"Failed to send single campaign to ID {id}: {e}")
-        record.campaign_status = "Failed"
-        record.delivery_status = "Failed"
+        log_obj.campaign_status = "Failed"
+        log_obj.delivery_status = "Failed"
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Failed to dispatch message: {str(e)}")
 
@@ -1019,11 +1136,11 @@ async def process_webhook_event(
     button_text: Optional[str] = None, 
     db: AsyncSession = None
 ):
-    stmt = select(Record).where(Record.message_id == message_id)
+    stmt = select(CampaignLog).where(CampaignLog.message_id == message_id)
     result = await db.execute(stmt)
-    record = result.scalar_one_or_none()
+    log = result.scalars().first()
     
-    if not record:
+    if not log:
         logger.warning(f"Webhook event ignored: message_id '{message_id}' not found in database.")
         return {"status": "ignored", "reason": "unknown_message_id"}
         
@@ -1037,41 +1154,41 @@ async def process_webhook_event(
             else:
                 display_status = status_val.capitalize()
                 
-            record.delivery_status = display_status
+            log.delivery_status = display_status
             
             if status_val == "sent":
-                record.campaign_status = "Sent"
+                log.campaign_status = "Sent"
             elif status_val == "delivered":
-                if not record.delivered_at:
-                    record.delivered_at = datetime.utcnow()
-                record.campaign_status = "Sent"
+                if not log.delivered_at:
+                    log.delivered_at = datetime.utcnow()
+                log.campaign_status = "Sent"
             elif status_val == "read":
-                if not record.delivered_at:
-                    record.delivered_at = datetime.utcnow()
-                record.read_at = datetime.utcnow()
-                record.campaign_status = "Sent"
+                if not log.delivered_at:
+                    log.delivered_at = datetime.utcnow()
+                log.read_at = datetime.utcnow()
+                log.campaign_status = "Sent"
             elif status_val == "failed":
-                record.campaign_status = "Failed"
-                record.parent_response = "No Response"
-                record.delivered_at = None
-                record.read_at = None
-                record.responded_at = None
+                log.campaign_status = "Failed"
+                log.parent_response = "No Response"
+                log.delivered_at = None
+                log.read_at = None
+                log.responded_at = None
                 
     elif event == "quick_reply":
         if button_text in ["Interested", "Not Interested"]:
-            record.parent_response = button_text
-            record.responded_at = datetime.utcnow()
+            log.parent_response = button_text
+            log.responded_at = datetime.utcnow()
             
-            record.delivery_status = "Read"
-            record.campaign_status = "Sent"
-            if not record.delivered_at:
-                record.delivered_at = datetime.utcnow()
-            if not record.read_at:
-                record.read_at = datetime.utcnow()
+            log.delivery_status = "Read"
+            log.campaign_status = "Sent"
+            if not log.delivered_at:
+                log.delivered_at = datetime.utcnow()
+            if not log.read_at:
+                log.read_at = datetime.utcnow()
             
     await db.commit()
-    logger.info(f"Updated record ID {record.id} status via webhook callback processing.")
-    return {"status": "success", "record_id": record.id}
+    logger.info(f"Updated CampaignLog ID {log.id} status via webhook callback processing.")
+    return {"status": "success", "record_id": log.record_id}
 
 # Real-Time Webhook Verification Endpoint (GET)
 @app.get("/api/v1/whatsapp/webhook")
@@ -1177,40 +1294,100 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
 # Aggregated Stats
 @app.get("/api/v1/stats")
 async def get_dashboard_stats(
+    template: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
-    """Returns aggregated counter statistics for metric cards."""
+    """Returns aggregated counter statistics for metric cards specifically for the selected template."""
+    selected_template = template
+    if not selected_template or selected_template.lower() == "all":
+        # Fetch the active template text
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+        if not template_obj:
+            tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+            tmpl_res = await db.execute(tmpl_stmt)
+            template_obj = tmpl_res.scalars().first()
+        selected_template = template_obj.template_name if template_obj else "admission_outreach"
+
     total_stmt = select(func.count(Record.id))
-    sent_stmt = select(func.count(Record.id)).where(Record.campaign_status == "Sent")
-    unsent_stmt = select(func.count(Record.id)).where(Record.campaign_status == "Pending")
-    read_stmt = select(func.count(Record.id)).where(Record.delivery_status == "Read")
-    failed_stmt = select(func.count(Record.id)).where(
-        or_(
-            Record.campaign_status == "Failed",
-            Record.delivery_status == "Failed"
+    
+    # We join with CampaignLog for counts
+    sent_stmt = select(func.count(Record.id)).join(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template,
+            CampaignLog.campaign_status == "Sent"
         )
     )
-    interested_stmt = select(func.count(Record.id)).where(Record.parent_response == "Interested")
-    not_interested_stmt = select(func.count(Record.id)).where(Record.parent_response == "Not Interested")
+    
+    read_stmt = select(func.count(Record.id)).join(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template,
+            CampaignLog.delivery_status == "Read"
+        )
+    )
+    
+    failed_stmt = select(func.count(Record.id)).join(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template,
+            or_(
+                CampaignLog.campaign_status == "Failed",
+                CampaignLog.delivery_status == "Failed"
+            )
+        )
+    )
+    
+    interested_stmt = select(func.count(Record.id)).join(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template,
+            CampaignLog.parent_response == "Interested"
+        )
+    )
+    
+    not_interested_stmt = select(func.count(Record.id)).join(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template,
+            CampaignLog.parent_response == "Not Interested"
+        )
+    )
     
     # Run async queries
     total_q = await db.execute(total_stmt)
     sent_q = await db.execute(sent_stmt)
-    unsent_q = await db.execute(unsent_stmt)
     read_q = await db.execute(read_stmt)
     failed_q = await db.execute(failed_stmt)
     interested_q = await db.execute(interested_stmt)
     not_interested_q = await db.execute(not_interested_stmt)
     
+    total_val = total_q.scalar() or 0
+    sent_val = sent_q.scalar() or 0
+    read_val = read_q.scalar() or 0
+    failed_val = failed_q.scalar() or 0
+    interested_val = interested_q.scalar() or 0
+    not_interested_val = not_interested_q.scalar() or 0
+    
+    # Unsent/Pending: Total - Sent - Failed
+    unsent_val = max(0, total_val - sent_val - failed_val)
+    
     return {
-        "total": total_q.scalar() or 0,
-        "sent": sent_q.scalar() or 0,
-        "unsent": unsent_q.scalar() or 0,
-        "read": read_q.scalar() or 0,
-        "failed": failed_q.scalar() or 0,
-        "interested": interested_q.scalar() or 0,
-        "not_interested": not_interested_q.scalar() or 0
+        "total": total_val,
+        "sent": sent_val,
+        "unsent": unsent_val,
+        "read": read_val,
+        "failed": failed_val,
+        "interested": interested_val,
+        "not_interested": not_interested_val
     }
 
 # Dynamic Branches Lookup API
@@ -1241,9 +1418,27 @@ async def get_records_list(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Retrieves paginated, filtered record entries for the dashboard data table."""
-    stmt = select(Record)
+    selected_template = template
+    if not selected_template or selected_template.lower() == "all":
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+        if not template_obj:
+            tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+            tmpl_res = await db.execute(tmpl_stmt)
+            template_obj = tmpl_res.scalars().first()
+        selected_template = template_obj.template_name if template_obj else "admission_outreach"
+
+    # Core query: Outer join on CampaignLog specifically for this template
+    stmt = select(Record, CampaignLog).outerjoin(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template
+        )
+    )
     
-    # Apply filters
+    # Apply search filter
     if search:
         search_pattern = f"%{search}%"
         stmt = stmt.where(
@@ -1255,35 +1450,43 @@ async def get_records_list(
             )
         )
         
+    # Apply template-specific status filters
     if delivery_status:
-        if delivery_status.lower() == "undelivered":
-            stmt = stmt.where(Record.campaign_status == "Sent", Record.delivery_status == "Sent")
-        elif delivery_status.lower() == "delivered":
-            stmt = stmt.where(Record.delivery_status.in_(["Delivered", "Read"]))
-        elif delivery_status.lower() == "not_read":
-            stmt = stmt.where(Record.delivery_status == "Delivered")
-        elif delivery_status.lower() == "read":
-            stmt = stmt.where(Record.delivery_status == "Read")
+        val = delivery_status.lower()
+        if val == "unsent":
+            stmt = stmt.where(or_(CampaignLog.delivery_status == None, CampaignLog.delivery_status.ilike("unsent")))
+        elif val == "undelivered":
+            stmt = stmt.where(CampaignLog.campaign_status == "Sent", CampaignLog.delivery_status == "Sent")
+        elif val == "delivered":
+            stmt = stmt.where(CampaignLog.delivery_status.in_(["Delivered", "Read"]))
+        elif val == "not_read":
+            stmt = stmt.where(CampaignLog.delivery_status == "Delivered")
+        elif val == "read":
+            stmt = stmt.where(CampaignLog.delivery_status == "Read")
         else:
-            stmt = stmt.where(Record.delivery_status.ilike(delivery_status))
+            stmt = stmt.where(CampaignLog.delivery_status.ilike(delivery_status))
         
     if parent_response:
-        stmt = stmt.where(Record.parent_response.ilike(parent_response))
+        if parent_response.lower() == "no response":
+            stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response.ilike("no response")))
+        else:
+            stmt = stmt.where(CampaignLog.parent_response.ilike(parent_response))
         
     if branch:
         stmt = stmt.where(Record.selected_branch.ilike(branch))
         
-    if template and template != "All" and template != "all":
-        stmt = stmt.where(Record.sent_template == template)
-        
     if campaign_status:
-        stmt = stmt.where(Record.campaign_status.ilike(campaign_status))
+        val = campaign_status.lower()
+        if val == "pending":
+            stmt = stmt.where(or_(CampaignLog.campaign_status == None, CampaignLog.campaign_status.ilike("pending")))
+        else:
+            stmt = stmt.where(CampaignLog.campaign_status.ilike(campaign_status))
         
     if responded:
         if responded.lower() == "true":
-            stmt = stmt.where(Record.parent_response != "No Response")
+            stmt = stmt.where(CampaignLog.parent_response != None, CampaignLog.parent_response != "No Response")
         else:
-            stmt = stmt.where(Record.parent_response == "No Response")
+            stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response == "No Response"))
             
     # Count total matches
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -1293,12 +1496,37 @@ async def get_records_list(
     # Retrieve paginated items (order by newly created/modified)
     stmt = stmt.order_by(Record.id.desc()).offset((page - 1) * limit).limit(limit)
     result = await db.execute(stmt)
-    records = result.scalars().all()
+    rows = result.all()
     
     total_pages = (total_count + limit - 1) // limit
     
+    records_list = []
+    for r, log in rows:
+        record_dict = r.to_dict()
+        if log:
+            record_dict["campaign_status"] = log.campaign_status
+            record_dict["delivery_status"] = log.delivery_status
+            record_dict["parent_response"] = log.parent_response
+            record_dict["message_id"] = log.message_id
+            record_dict["sent_template"] = log.template_name
+            record_dict["sent_at"] = log.sent_at.isoformat() if log.sent_at else None
+            record_dict["delivered_at"] = log.delivered_at.isoformat() if log.delivered_at else None
+            record_dict["read_at"] = log.read_at.isoformat() if log.read_at else None
+            record_dict["responded_at"] = log.responded_at.isoformat() if log.responded_at else None
+        else:
+            record_dict["campaign_status"] = "Pending"
+            record_dict["delivery_status"] = "Unsent"
+            record_dict["parent_response"] = "No Response"
+            record_dict["message_id"] = None
+            record_dict["sent_template"] = selected_template
+            record_dict["sent_at"] = None
+            record_dict["delivered_at"] = None
+            record_dict["read_at"] = None
+            record_dict["responded_at"] = None
+        records_list.append(record_dict)
+    
     return {
-        "records": [r.to_dict() for r in records],
+        "records": records_list,
         "total": total_count,
         "page": page,
         "limit": limit,
@@ -1319,7 +1547,24 @@ async def export_records_to_excel(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Generates an Excel spreadsheet containing the filtered list of records."""
-    stmt = select(Record)
+    selected_template = template
+    if not selected_template or selected_template.lower() == "all":
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+        if not template_obj:
+            tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+            tmpl_res = await db.execute(tmpl_stmt)
+            template_obj = tmpl_res.scalars().first()
+        selected_template = template_obj.template_name if template_obj else "admission_outreach"
+
+    stmt = select(Record, CampaignLog).outerjoin(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template
+        )
+    )
     
     # Apply filters (exactly matching get_records_list)
     if search:
@@ -1334,51 +1579,61 @@ async def export_records_to_excel(
         )
         
     if delivery_status:
-        if delivery_status.lower() == "undelivered":
-            stmt = stmt.where(Record.campaign_status == "Sent", Record.delivery_status == "Sent")
-        elif delivery_status.lower() == "delivered":
-            stmt = stmt.where(Record.delivery_status.in_(["Delivered", "Read"]))
-        elif delivery_status.lower() == "not_read":
-            stmt = stmt.where(Record.delivery_status == "Delivered")
-        elif delivery_status.lower() == "read":
-            stmt = stmt.where(Record.delivery_status == "Read")
+        val = delivery_status.lower()
+        if val == "unsent":
+            stmt = stmt.where(or_(CampaignLog.delivery_status == None, CampaignLog.delivery_status.ilike("unsent")))
+        elif val == "undelivered":
+            stmt = stmt.where(CampaignLog.campaign_status == "Sent", CampaignLog.delivery_status == "Sent")
+        elif val == "delivered":
+            stmt = stmt.where(CampaignLog.delivery_status.in_(["Delivered", "Read"]))
+        elif val == "not_read":
+            stmt = stmt.where(CampaignLog.delivery_status == "Delivered")
+        elif val == "read":
+            stmt = stmt.where(CampaignLog.delivery_status == "Read")
         else:
-            stmt = stmt.where(Record.delivery_status.ilike(delivery_status))
+            stmt = stmt.where(CampaignLog.delivery_status.ilike(delivery_status))
         
     if parent_response:
-        stmt = stmt.where(Record.parent_response.ilike(parent_response))
+        if parent_response.lower() == "no response":
+            stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response.ilike("no response")))
+        else:
+            stmt = stmt.where(CampaignLog.parent_response.ilike(parent_response))
         
     if branch:
         stmt = stmt.where(Record.selected_branch.ilike(branch))
         
-    if template and template != "All" and template != "all":
-        stmt = stmt.where(Record.sent_template == template)
-        
     if campaign_status:
-        stmt = stmt.where(Record.campaign_status.ilike(campaign_status))
+        val = campaign_status.lower()
+        if val == "pending":
+            stmt = stmt.where(or_(CampaignLog.campaign_status == None, CampaignLog.campaign_status.ilike("pending")))
+        else:
+            stmt = stmt.where(CampaignLog.campaign_status.ilike(campaign_status))
         
     if responded:
         if responded.lower() == "true":
-            stmt = stmt.where(Record.parent_response != "No Response")
+            stmt = stmt.where(CampaignLog.parent_response != None, CampaignLog.parent_response != "No Response")
         else:
-            stmt = stmt.where(Record.parent_response == "No Response")
+            stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response == "No Response"))
             
     # Retrieve all matched items without pagination limits
     stmt = stmt.order_by(Record.id.desc())
     result = await db.execute(stmt)
-    records = result.scalars().all()
+    rows = result.all()
     
     # Generate DataFrame
     data = []
-    for r in records:
+    for r, log in rows:
+        d_status = log.delivery_status if log else "Unsent"
+        p_resp = log.parent_response if log else "No Response"
+        s_tmpl = log.template_name if log else selected_template
         data.append({
             "Student Name": r.student_name,
             "Parent Name": r.parent_name,
             "Phone Number": r.phone_number,
             "Selected Branch": r.selected_branch,
-            "Delivery Status": r.delivery_status,
-            "Parent Response": r.parent_response,
-            "Sent Template": r.sent_template or "N/A"
+            "Delivery Status": d_status,
+            "Parent Response": p_resp,
+            "Sent Template": s_tmpl or "N/A"
         })
         
     df = pd.DataFrame(data)
@@ -1399,6 +1654,8 @@ async def export_records_to_excel(
 
 # Developer Simulation Trigger
 
+# Developer Simulation Trigger
+
 @app.post("/api/v1/simulation/webhook-trigger")
 async def trigger_simulation_webhook(
     payload: SimulationPayload, 
@@ -1413,28 +1670,57 @@ async def trigger_simulation_webhook(
     if not record:
         raise HTTPException(status_code=404, detail="Student record not found.")
         
-    if not record.message_id:
+    # Fetch active customized template
+    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+    tmpl_res = await db.execute(tmpl_stmt)
+    template_obj = tmpl_res.scalars().first()
+    if not template_obj:
+        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+    template_name = template_obj.template_name if template_obj else "admission_outreach"
+
+    log_stmt = select(CampaignLog).where(
+        CampaignLog.record_id == record.id,
+        CampaignLog.template_name == template_name
+    )
+    log_res = await db.execute(log_stmt)
+    log_obj = log_res.scalars().first()
+    
+    if not log_obj or not log_obj.message_id:
         # Auto-initialize message dispatch for seamless sandbox simulation
         import uuid
-        record.message_id = f"wa_msg_{uuid.uuid4().hex[:12]}"
-        record.campaign_status = "Sent"
-        record.delivery_status = "Sent"
-        record.sent_at = datetime.utcnow()
+        msg_id = f"wa_msg_{uuid.uuid4().hex[:12]}"
+        if not log_obj:
+            log_obj = CampaignLog(
+                record_id=record.id,
+                template_name=template_name,
+                message_id=msg_id,
+                campaign_status="Sent",
+                delivery_status="Sent",
+                sent_at=datetime.utcnow()
+            )
+            db.add(log_obj)
+        else:
+            log_obj.message_id = msg_id
+            log_obj.campaign_status = "Sent"
+            log_obj.delivery_status = "Sent"
+            log_obj.sent_at = datetime.utcnow()
         await db.commit()
-        logger.info(f"Auto-initialized campaign dispatch for simulation on record ID {record.id}.")
+        logger.info(f"Auto-initialized campaign dispatch log for simulation on record ID {record.id}.")
         
     target = payload.target_state
     
     if target in ["delivered", "read", "failed"]:
         webhook_payload = WebhookPayload(
             event="status_update",
-            message_id=record.message_id,
+            message_id=log_obj.message_id,
             status=target
         )
     elif target in ["Interested", "Not Interested"]:
         webhook_payload = WebhookPayload(
             event="quick_reply",
-            message_id=record.message_id,
+            message_id=log_obj.message_id,
             button_text=target
         )
     else:

@@ -168,26 +168,23 @@ function App() {
   // LIFECYCLE & POLLING
   // ----------------------------------------------------
   // Keep latest filter, search, page state in a ref to avoid stale closures in the polling interval
-  const pollingStateRef = useRef({ currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter });
+  const pollingStateRef = useRef({ currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName });
   useEffect(() => {
-    pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter };
-  }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter]);
+    pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName };
+  }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName]);
 
-  // ----------------------------------------------------
-  // LIFECYCLE & POLLING
-  // ----------------------------------------------------
   useEffect(() => {
     if (!token) return;
     
     // Initial fetch
-    fetchStats();
+    fetchStats(selectedTemplateName);
     fetchTemplatesList(true);
     fetchBranches();
     fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
 
     // Poll statistics and grid periodically to pick up async background sends
     const interval = setInterval(() => {
-      fetchStats();
+      fetchStats(pollingStateRef.current.selectedTemplateName);
       fetchBranches();
       fetchRecords(
         pollingStateRef.current.currentPage, 
@@ -204,6 +201,12 @@ function App() {
 
     return () => clearInterval(interval);
   }, [token]);
+
+  // Handle stats reload when selected template changes
+  useEffect(() => {
+    if (!token) return;
+    fetchStats(selectedTemplateName);
+  }, [selectedTemplateName, token]);
 
   // Cascading dependency handlers
   const handleDispatchFilterChange = (val) => {
@@ -376,9 +379,10 @@ function App() {
   // ----------------------------------------------------
 
   // Fetch Dashboard aggregate statistics
-  const fetchStats = async () => {
+  const fetchStats = async (tmpl = null) => {
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/stats`);
+      const url = tmpl ? `${API_BASE}/api/v1/stats?template=${encodeURIComponent(tmpl)}` : `${API_BASE}/api/v1/stats`;
+      const res = await authFetch(url);
       if (!res.ok) throw new Error();
       const data = await res.json();
       setStats(data);
@@ -482,6 +486,7 @@ function App() {
         const active = data.find(t => t.is_active);
         if (active) {
           setSelectedTemplateName(active.template_name);
+          setTemplateFilter(active.template_name);
           setTemplateText(active.template_text);
           setMediaType(active.media_type || 'none');
           setMediaUrl(active.media_url || null);
@@ -494,6 +499,7 @@ function App() {
           }
         } else if (data.length > 0) {
           setSelectedTemplateName(data[0].template_name);
+          setTemplateFilter(data[0].template_name);
           setTemplateText(data[0].template_text);
           setMediaType(data[0].media_type || 'none');
           setMediaUrl(data[0].media_url || null);
@@ -513,6 +519,7 @@ function App() {
 
   const handleTemplateChange = async (name) => {
     setSelectedTemplateName(name);
+    setTemplateFilter(name);
     const tmpl = templatesList.find(t => t.template_name === name);
     if (tmpl) {
       setTemplateText(tmpl.template_text);
@@ -534,6 +541,7 @@ function App() {
           body: JSON.stringify({ template_name: name })
         });
         triggerToast(`Active template switched to ${name}`, "success");
+        fetchStats(name);
       } catch (err) {
         console.error("Error updating active template:", err);
         triggerToast("Failed to update active template selection.", "error");
@@ -1387,7 +1395,7 @@ function App() {
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" stroke-linejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3"></polygon>
                 </svg>
-                Launch Broadcast Campaign
+                Launch Broadcast Campaign {stats.unsent > 0 ? `(${stats.unsent} pending)` : ''}
               </button>
             </div>
           </div>
@@ -1548,6 +1556,24 @@ function App() {
           )}
 
           <div className="table-container">
+            <div style={{
+              padding: '0.75rem 1.5rem',
+              backgroundColor: '#f8fafc',
+              borderBottom: '1px solid var(--border-color)',
+              fontSize: '0.85rem',
+              color: 'var(--color-text-muted)',
+              fontWeight: '500',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              <span>Showing delivery status specifically for template: <strong>{templateFilter === 'all' ? selectedTemplateName : templateFilter}</strong></span>
+            </div>
             <table className="data-table">
               <thead>
                 <tr>
