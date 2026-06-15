@@ -713,6 +713,8 @@ async def sync_templates_from_meta(
                 if res.status_code != 200:
                     raise HTTPException(status_code=res.status_code, detail=f"Meta template sync failed: {res.text}")
                 meta_data = res.json().get("data", [])
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error fetching templates from Meta: {e}")
             raise HTTPException(status_code=500, detail=f"Network error syncing templates: {str(e)}")
@@ -771,7 +773,7 @@ async def sync_templates_from_meta(
     for t in templates_data:
         stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == t["name"])
         res = await db.execute(stmt)
-        tmpl = res.scalar_one_or_none()
+        tmpl = res.scalars().first()
         
         if not tmpl:
             tmpl = CampaignTemplate(
@@ -797,11 +799,11 @@ async def sync_templates_from_meta(
     # Make sure at least one is active if none is active
     stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True)
     res = await db.execute(stmt)
-    active_t = res.scalar_one_or_none()
+    active_t = res.scalars().first()
     if not active_t:
         stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc())
         res = await db.execute(stmt)
-        first_t = res.scalar_one_or_none()
+        first_t = res.scalars().first()
         if first_t:
             first_t.is_active = True
             

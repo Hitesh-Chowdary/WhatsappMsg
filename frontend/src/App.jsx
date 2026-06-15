@@ -1239,22 +1239,13 @@ function App() {
                     <label htmlFor="template-selector" className="editor-label" style={{ marginBottom: 0 }}>Template:</label>
                     <select
                       id="template-selector"
-                      className="form-control"
-                      style={{
-                        padding: '0.25rem 0.5rem',
-                        fontSize: '0.85rem',
-                        background: 'rgba(255, 255, 255, 0.05)',
-                        color: 'var(--color-text)',
-                        border: '1px solid var(--border-color)',
-                        borderRadius: '4px',
-                        outline: 'none',
-                        cursor: 'pointer'
-                      }}
+                      className="filter-select"
+                      style={{ padding: '0.25rem 2rem 0.25rem 0.75rem', height: '32px', fontSize: '0.85rem' }}
                       value={selectedTemplateName}
                       onChange={(e) => handleTemplateChange(e.target.value)}
                     >
                       {templatesList.map(t => (
-                        <option key={t.template_name} value={t.template_name} style={{ background: '#1a1a2e', color: 'var(--color-text)' }}>
+                        <option key={t.template_name} value={t.template_name}>
                           {t.template_name}
                         </option>
                       ))}
