@@ -88,14 +88,8 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         template_language = template_obj.language if template_obj else "en_US"
         variable_names = template_obj.variable_names if template_obj else ""
 
-        # Fetch all pending/eligible records for this template
-        stmt = select(Record).where(
-            or_(Record.parent_response == None, Record.parent_response != "Interested"),
-            or_(
-                Record.campaign_status.in_(["Pending", "Failed"]),
-                Record.sent_template != template_name
-            )
-        )
+        # Fetch all pending records
+        stmt = select(Record).where(Record.campaign_status == "Pending")
         result = await db.execute(stmt)
         pending_records = result.scalars().all()
         
@@ -872,27 +866,8 @@ async def broadcast_campaign(
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
-    """Launches the broadcast campaign for all eligible records in the background."""
-    # Fetch active custom template
-    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
-    tmpl_res = await db.execute(tmpl_stmt)
-    template_obj = tmpl_res.scalars().first()
-    
-    # Fallback to first if none active
-    if not template_obj:
-        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
-        tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalars().first()
-        
-    active_template = template_obj.template_name if template_obj else "parent_outreach"
-
-    stmt = select(func.count(Record.id)).where(
-        or_(Record.parent_response == None, Record.parent_response != "Interested"),
-        or_(
-            Record.campaign_status.in_(["Pending", "Failed"]),
-            Record.sent_template != active_template
-        )
-    )
+    """Launches the broadcast campaign for all Pending records in the background."""
+    stmt = select(func.count(Record.id)).where(Record.campaign_status == "Pending")
     result = await db.execute(stmt)
     pending_count = result.scalar() or 0
     
@@ -959,13 +934,13 @@ async def send_single_message(
     # Fetch active custom template
     tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
     tmpl_res = await db.execute(tmpl_stmt)
-    template_obj = tmpl_res.scalars().first()
+    template_obj = tmpl_res.scalar_one_or_none()
     
     # Fallback to first if none active
     if not template_obj:
         tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
         tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalars().first()
+        template_obj = tmpl_res.scalar_one_or_none()
         
     template_name = template_obj.template_name if template_obj else "admission_outreach"
     template_text = template_obj.template_text if template_obj else (
@@ -1205,61 +1180,19 @@ async def get_dashboard_stats(
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
-    """Returns aggregated counter statistics for metric cards relative to active campaign template."""
-    # Fetch active custom template
-    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
-    tmpl_res = await db.execute(tmpl_stmt)
-    template_obj = tmpl_res.scalars().first()
-    
-    # Fallback to first if none active
-    if not template_obj:
-        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
-        tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalars().first()
-        
-    active_template = template_obj.template_name if template_obj else "parent_outreach"
-
+    """Returns aggregated counter statistics for metric cards."""
     total_stmt = select(func.count(Record.id))
-    
-    # Sent: sent the active template
-    sent_stmt = select(func.count(Record.id)).where(
-        Record.campaign_status == "Sent",
-        Record.sent_template == active_template
-    )
-    
-    # Unsent: eligible to be sent active template
-    unsent_stmt = select(func.count(Record.id)).where(
-        or_(Record.parent_response == None, Record.parent_response != "Interested"),
-        or_(
-            Record.campaign_status.in_(["Pending", "Failed"]),
-            Record.sent_template != active_template
-        )
-    )
-    
-    # Read: read the active template
-    read_stmt = select(func.count(Record.id)).where(
-        Record.delivery_status == "Read",
-        Record.sent_template == active_template
-    )
-    
-    # Failed: failed to receive active template
+    sent_stmt = select(func.count(Record.id)).where(Record.campaign_status == "Sent")
+    unsent_stmt = select(func.count(Record.id)).where(Record.campaign_status == "Pending")
+    read_stmt = select(func.count(Record.id)).where(Record.delivery_status == "Read")
     failed_stmt = select(func.count(Record.id)).where(
-        Record.sent_template == active_template,
         or_(
             Record.campaign_status == "Failed",
             Record.delivery_status == "Failed"
         )
     )
-    
-    # Interested/Not Interested responses to the active template
-    interested_stmt = select(func.count(Record.id)).where(
-        Record.parent_response == "Interested",
-        Record.sent_template == active_template
-    )
-    not_interested_stmt = select(func.count(Record.id)).where(
-        Record.parent_response == "Not Interested",
-        Record.sent_template == active_template
-    )
+    interested_stmt = select(func.count(Record.id)).where(Record.parent_response == "Interested")
+    not_interested_stmt = select(func.count(Record.id)).where(Record.parent_response == "Not Interested")
     
     # Run async queries
     total_q = await db.execute(total_stmt)
