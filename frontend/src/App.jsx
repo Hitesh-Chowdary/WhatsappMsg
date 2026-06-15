@@ -119,7 +119,12 @@ function App() {
     // Confirmed interested parents are excluded from bulk outreach
     if (response === 'interested') return false;
     
-    // Unsent, failed, or not interested parents are eligible
+    // If they have not been sent the currently selected template, they are eligible
+    if (rec.sent_template !== selectedTemplateName) {
+      return true;
+    }
+    
+    // Unsent, failed, or not interested parents (for the same template) are eligible
     return (
       campaignStatus === 'pending' || 
       campaignStatus === 'failed' || 
