@@ -135,6 +135,7 @@ function App() {
   const [mediaUrl, setMediaUrl] = useState(null);
   const [mediaFilename, setMediaFilename] = useState('');
   const [mediaUploading, setMediaUploading] = useState(false);
+  const [mediaFileMissing, setMediaFileMissing] = useState(false);
   const [saveStatus, setSaveStatus] = useState('synced'); // synced, unsaved, saving
 
   // Uploader State
@@ -466,6 +467,7 @@ function App() {
       setTemplateText(data.template_text);
       setMediaType(data.media_type || 'none');
       setMediaUrl(data.media_url || null);
+      setMediaFileMissing(data.media_file_missing || false);
       if (data.media_url) {
         const parts = data.media_url.split('/');
         setMediaFilename(parts[parts.length - 1]);
@@ -502,6 +504,7 @@ function App() {
       setTemplateText(data.template_text);
       setMediaType(data.media_type || 'none');
       setMediaUrl(data.media_url || null);
+      setMediaFileMissing(false);
       setSaveStatus('synced');
       triggerToast("Template saved successfully.", "success");
     } catch (err) {
@@ -529,6 +532,7 @@ function App() {
 
       setMediaUrl(data.media_url);
       setMediaFilename(file.name);
+      setMediaFileMissing(false);
       setSaveStatus('unsaved');
       triggerToast("Media file uploaded successfully.", "success");
     } catch (err) {
@@ -1105,9 +1109,31 @@ function App() {
 
           {/* Campaign Controls (Right Side - Customizable Template) */}
           <div className="glass-panel campaign-panel">
-            <div class="panel-header">
+            <div className="panel-header">
               <h4>Campaign Control Center</h4>
             </div>
+            
+            {mediaFileMissing && mediaType !== 'none' && (
+              <div style={{
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                borderRadius: '6px',
+                padding: '0.75rem 1rem',
+                margin: '0.75rem 1rem 0.25rem 1rem',
+                fontSize: '0.75rem',
+                color: 'var(--color-coral)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                lineHeight: '1.4'
+              }}>
+                <span style={{ fontSize: '1.25rem' }}>⚠️</span>
+                <span>
+                  <strong>Outreach image/media not found on the server.</strong> <br />
+                  The previous server session ended or the container was restarted. Please <strong>re-upload</strong> the file or <strong>paste a valid URL</strong> below to restore it before launching campaigns.
+                </span>
+              </div>
+            )}
             
             <div className="campaign-desc-container">
               <div className="template-editor-group">

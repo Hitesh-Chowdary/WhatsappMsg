@@ -508,10 +508,20 @@ async def get_active_template(
     
     if not template:
         raise HTTPException(status_code=404, detail="Active template not configured in database.")
+        
+    media_url = template.media_url
+    media_file_missing = False
+    if media_url and media_url.startswith("/static/media/"):
+        file_name = media_url.replace("/static/media/", "")
+        file_path = os.path.join(PROJECT_ROOT, "frontend", "static", "media", file_name)
+        if not os.path.exists(file_path):
+            media_file_missing = True
+            
     return {
         "template_text": template.template_text,
         "media_type": template.media_type or "none",
-        "media_url": template.media_url
+        "media_url": template.media_url,
+        "media_file_missing": media_file_missing
     }
 
 @app.post("/api/v1/template")
