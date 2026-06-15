@@ -129,6 +129,12 @@ class MetaWhatsAppClient(WhatsAppClient):
         active_template_name = template_name or self.template_name
         active_template_language = template_language or self.template_language
         
+        # Explicit template language normalization for compatibility with Meta registered configurations
+        if active_template_name == "admission_outreach" and active_template_language in ["en", "en-US", "en-GB"]:
+            active_template_language = "en_US"
+        elif active_template_name == "parent_outreach" and active_template_language in ["en_US", "en-US", "en-GB"]:
+            active_template_language = "en"
+        
         # Build components parameter array
         parameters = []
         vars_list = variable_names or []

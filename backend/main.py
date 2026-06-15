@@ -167,6 +167,17 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 log_obj.campaign_status = "Failed"
                 log_obj.delivery_status = "Failed"
             
+            # Sync to legacy Record model columns for real-time visibility
+            record.campaign_status = log_obj.campaign_status
+            record.delivery_status = log_obj.delivery_status
+            record.parent_response = log_obj.parent_response
+            record.message_id = log_obj.message_id
+            record.sent_template = log_obj.template_name
+            record.sent_at = log_obj.sent_at
+            record.delivered_at = log_obj.delivered_at
+            record.read_at = log_obj.read_at
+            record.responded_at = log_obj.responded_at
+            
             # Commit after each message to update the database states in real-time
             await db.commit()
             
@@ -268,6 +279,17 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 logger.error(f"Error bulk dispatching to {record.phone_number} (ID: {record.id}): {e}")
                 log_obj.campaign_status = "Failed"
                 log_obj.delivery_status = "Failed"
+            
+            # Sync to legacy Record model columns for real-time visibility
+            record.campaign_status = log_obj.campaign_status
+            record.delivery_status = log_obj.delivery_status
+            record.parent_response = log_obj.parent_response
+            record.message_id = log_obj.message_id
+            record.sent_template = log_obj.template_name
+            record.sent_at = log_obj.sent_at
+            record.delivered_at = log_obj.delivered_at
+            record.read_at = log_obj.read_at
+            record.responded_at = log_obj.responded_at
             
             # Commit after each message to update database status in real-time
             await db.commit()
@@ -796,8 +818,10 @@ async def sync_templates_from_meta(
             # Determine default variable names list based on text analysis or placeholders
             if name == "parent_outreach":
                 variable_names = "parent_name,student_name,selected_branch"
+                language = "en"
             elif name == "admission_outreach":
                 variable_names = "student,status"
+                language = "en_US"
             else:
                 # Count placeholders (e.g. {{1}}, {{2}}...)
                 import re
@@ -1097,6 +1121,18 @@ async def send_single_message(
             log_obj.delivered_at = None
             log_obj.read_at = None
             log_obj.responded_at = None
+            
+            # Sync to legacy Record model columns for real-time visibility
+            record.campaign_status = log_obj.campaign_status
+            record.delivery_status = log_obj.delivery_status
+            record.parent_response = log_obj.parent_response
+            record.message_id = log_obj.message_id
+            record.sent_template = log_obj.template_name
+            record.sent_at = log_obj.sent_at
+            record.delivered_at = log_obj.delivered_at
+            record.read_at = log_obj.read_at
+            record.responded_at = log_obj.responded_at
+            
             await db.commit()
             
             # Construct a record dict with template status overridden
@@ -1185,6 +1221,21 @@ async def process_webhook_event(
                 log.delivered_at = datetime.utcnow()
             if not log.read_at:
                 log.read_at = datetime.utcnow()
+            
+    # Mirror updates to the legacy Record table so direct database checks are synced
+    rec_stmt = select(Record).where(Record.id == log.record_id)
+    rec_res = await db.execute(rec_stmt)
+    rec = rec_res.scalars().first()
+    if rec:
+        rec.campaign_status = log.campaign_status
+        rec.delivery_status = log.delivery_status
+        rec.parent_response = log.parent_response
+        rec.message_id = log.message_id
+        rec.sent_template = log.template_name
+        rec.sent_at = log.sent_at
+        rec.delivered_at = log.delivered_at
+        rec.read_at = log.read_at
+        rec.responded_at = log.responded_at
             
     await db.commit()
     logger.info(f"Updated CampaignLog ID {log.id} status via webhook callback processing.")
