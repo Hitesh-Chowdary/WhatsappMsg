@@ -139,12 +139,12 @@ class MetaWhatsAppClient(WhatsAppClient):
         parameters = []
         vars_list = None
         
-        # If variable_names was explicitly provided as a list, use it
-        if variable_names is not None:
+        # If variable_names was explicitly provided as a non-empty list, use it
+        if variable_names:
             vars_list = list(variable_names)
             
-        # Try to fetch/parse it from the DB if not explicitly passed
-        if vars_list is None:
+        # Try to fetch/parse it from the DB if not explicitly passed or empty
+        if not vars_list:
             try:
                 from database import AsyncSessionLocal, CampaignTemplate
                 from sqlalchemy import select
@@ -153,22 +153,26 @@ class MetaWhatsAppClient(WhatsAppClient):
                     res = await session.execute(stmt)
                     t_obj = res.scalar_one_or_none()
                     if t_obj:
-                        if t_obj.variable_names is not None:
+                        if t_obj.variable_names:
                             vars_list = [v.strip() for v in t_obj.variable_names.split(",") if v.strip()]
-                        elif t_obj.template_text:
+                        
+                        # Fallback to regex parsing of template text if variables column is empty
+                        if not vars_list and t_obj.template_text:
                             import re
                             parsed_vars = re.findall(r"\{\{([^}]+)\}\}", t_obj.template_text)
                             vars_list = [v.strip() for v in parsed_vars if v.strip()]
-                        else:
-                            vars_list = []
             except Exception as db_err:
                 logger.error(f"Error fetching template variables from DB: {db_err}")
 
-        # If still None, fall back to environment variable
-        if vars_list is None:
-            var_names_str = os.getenv("META_TEMPLATE_VARIABLE_NAMES")
-            if var_names_str:
-                vars_list = [v.strip() for v in var_names_str.split(",") if v.strip()]
+        # If still empty, fall back to environment variables ONLY if template name matches env configuration
+        if not vars_list:
+            env_template_name = os.getenv("META_TEMPLATE_NAME", "parent_outreach")
+            if active_template_name == env_template_name:
+                var_names_str = os.getenv("META_TEMPLATE_VARIABLE_NAMES")
+                if var_names_str:
+                    vars_list = [v.strip() for v in var_names_str.split(",") if v.strip()]
+                else:
+                    vars_list = []
             else:
                 vars_list = []
 
