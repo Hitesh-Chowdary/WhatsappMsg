@@ -140,6 +140,9 @@ function App() {
   const [selectedTemplateName, setSelectedTemplateName] = useState('');
   const [templateFilter, setTemplateFilter] = useState('all');
   const [saveStatus, setSaveStatus] = useState('synced'); // synced, unsaved, saving
+  const [showAddTemplateInput, setShowAddTemplateInput] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState('');
+  const [addingTemplate, setAddingTemplate] = useState(false);
 
   // Uploader State
   const [dragActive, setDragActive] = useState(false);
@@ -574,6 +577,53 @@ function App() {
     }
   };
 
+  const handleAddTemplate = async () => {
+    const name = newTemplateName.trim();
+    if (!name) {
+      triggerToast("Please enter a template name.", "error");
+      return;
+    }
+    
+    setAddingTemplate(true);
+    triggerToast(`Fetching template '${name}' from Meta...`, "info");
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/templates/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_name: name })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to add template.");
+      
+      triggerToast(data.message || `Template '${name}' added successfully.`, "success");
+      setNewTemplateName('');
+      setShowAddTemplateInput(false);
+      
+      // Refresh templates list and select this newly added one
+      await fetchTemplatesList(false);
+      const t = data.template;
+      setSelectedTemplateName(t.template_name);
+      setTemplateFilter(t.template_name);
+      setTemplateText(t.template_text);
+      setMediaType(t.media_type || 'none');
+      setMediaUrl(t.media_url || null);
+      setMediaFileMissing(t.media_file_missing || false);
+      if (t.media_url) {
+        const parts = t.media_url.split('/');
+        setMediaFilename(parts[parts.length - 1]);
+      } else {
+        setMediaFilename('');
+      }
+      setSaveStatus('synced');
+      fetchStats(t.template_name);
+    } catch (err) {
+      console.error(err);
+      triggerToast(err.message || "Error adding template.", "error");
+    } finally {
+      setAddingTemplate(false);
+    }
+  };
+
   // Save template text
   const handleSaveTemplate = async () => {
     if (!templateText.trim()) {
@@ -831,6 +881,55 @@ function App() {
   // ----------------------------------------------------
   // INTERACTIVE TEMPLATE PREVIEW HELPERS
   // ----------------------------------------------------
+  const getTemplateFields = () => {
+    const tmpl = templatesList.find(t => t.template_name === selectedTemplateName);
+    if (!tmpl) return { required: [], missing: [] };
+    
+    const vars = tmpl.variable_names 
+      ? tmpl.variable_names.split(',').map(v => v.trim()).filter(Boolean) 
+      : [];
+      
+    if (vars.length === 0) {
+      return { required: [], missing: [] };
+    }
+    
+    const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
+    
+    const missing = [];
+    if (parsedColumns.length > 0) {
+      const normalizedColumns = parsedColumns.map(c => normalize(c));
+      
+      vars.forEach(v => {
+        const normV = normalize(v);
+        
+        // Define synonym groups for standard mapping
+        const studentSynonyms = ['studentname', 'student', 'candidatename', 'candidate'];
+        const parentSynonyms = ['parentname', 'parent', 'fathername', 'mothername', 'guardianname', 'guardian'];
+        const branchSynonyms = ['selectedbranch', 'branch', 'course', 'selectedcourse', 'status', 'admissionstatus'];
+        
+        let found = normalizedColumns.includes(normV);
+        
+        if (!found) {
+          if (studentSynonyms.includes(normV)) {
+            found = normalizedColumns.some(c => studentSynonyms.includes(c));
+          } else if (parentSynonyms.includes(normV)) {
+            found = normalizedColumns.some(c => parentSynonyms.includes(c));
+          } else if (branchSynonyms.includes(normV)) {
+            found = normalizedColumns.some(c => branchSynonyms.includes(c));
+          }
+        }
+        
+        if (!found) {
+          missing.push(v);
+        }
+      });
+    }
+    
+    return { required: vars, missing };
+  };
+
+  const { required: requiredFields, missing: missingFields } = getTemplateFields();
+
   const renderLivePreviewText = () => {
     if (!templateText) {
       return <span className="text-muted">Type template text above...</span>;
@@ -1210,17 +1309,63 @@ function App() {
 
           {/* Campaign Controls (Right Side - Customizable Template) */}
           <div className="glass-panel campaign-panel">
-            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
               <h4>Campaign Control Center</h4>
-              <button 
-                onClick={handleSyncTemplates} 
-                className="btn btn-secondary btn-sm" 
-                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
-                disabled={syncingTemplates}
-              >
-                {syncingTemplates ? 'Syncing...' : '🔄 Sync Templates'}
-              </button>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button 
+                  onClick={() => setShowAddTemplateInput(!showAddTemplateInput)} 
+                  className="btn btn-secondary btn-sm" 
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                >
+                  ➕ Add Template
+                </button>
+                <button 
+                  onClick={handleSyncTemplates} 
+                  className="btn btn-secondary btn-sm" 
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                  disabled={syncingTemplates}
+                >
+                  {syncingTemplates ? 'Syncing...' : '🔄 Sync Templates'}
+                </button>
+              </div>
             </div>
+            
+            {showAddTemplateInput && (
+              <div style={{
+                padding: '0.75rem 1rem',
+                borderBottom: '1px solid var(--border-color)',
+                backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                display: 'flex',
+                gap: '0.5rem',
+                alignItems: 'center'
+              }}>
+                <input 
+                  type="text" 
+                  placeholder="Template Name (e.g. parent_outreach)" 
+                  className="filter-select"
+                  style={{ flex: 1, height: '32px', fontSize: '0.8rem' }}
+                  value={newTemplateName}
+                  onChange={(e) => setNewTemplateName(e.target.value)}
+                  disabled={addingTemplate}
+                />
+                <button 
+                  onClick={handleAddTemplate} 
+                  className="btn btn-primary btn-sm"
+                  style={{ height: '32px', fontSize: '0.75rem' }}
+                  disabled={addingTemplate}
+                >
+                  {addingTemplate ? 'Adding...' : 'Fetch'}
+                </button>
+                <button 
+                  onClick={() => { setShowAddTemplateInput(false); setNewTemplateName(''); }} 
+                  className="btn btn-secondary btn-sm"
+                  style={{ height: '32px', fontSize: '0.75rem' }}
+                  disabled={addingTemplate}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
             
             {mediaFileMissing && mediaType !== 'none' && (
               <div style={{
@@ -1394,8 +1539,68 @@ function App() {
               </div>
             </div>
 
+            {/* Template variable requirement checklist & spreadsheet warning */}
+            {requiredFields.length > 0 ? (
+              <div style={{ margin: '0rem 1rem 0.75rem 1rem' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                  Required template variables:
+                </span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                  {requiredFields.map(f => {
+                    const isMissing = missingFields.includes(f);
+                    return (
+                      <span 
+                        key={f} 
+                        style={{ 
+                          fontSize: '0.7rem', 
+                          padding: '0.15rem 0.4rem', 
+                          borderRadius: '4px', 
+                          background: isMissing ? 'rgba(239, 68, 68, 0.15)' : 'rgba(46, 204, 113, 0.15)', 
+                          color: isMissing ? '#fc8181' : '#2ecc71',
+                          border: isMissing ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(46, 204, 113, 0.3)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem'
+                        }}
+                      >
+                        {isMissing ? '❌' : '✅'} {f}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.75rem', color: 'rgba(46, 204, 113, 0.8)', margin: '0rem 1rem 0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                <span>✅ Static template (no variables required). Can send directly.</span>
+              </div>
+            )}
+
+            {missingFields.length > 0 && (
+              <div style={{
+                backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                borderRadius: '6px',
+                padding: '0.75rem 1rem',
+                margin: '0rem 1rem 0.75rem 1rem',
+                fontSize: '0.75rem',
+                color: '#fc8181',
+                lineHeight: '1.4'
+              }}>
+                <strong>⚠️ Spreadsheet Header Mismatch</strong> <br />
+                Your uploaded spreadsheet is missing columns for: <strong>{missingFields.join(', ')}</strong>. Please upload a spreadsheet with the matching headers to send.
+              </div>
+            )}
+
             <div className="campaign-actions">
-              <button onClick={handleLaunchBroadcast} className="btn btn-primary btn-lg btn-block">
+              <button 
+                onClick={handleLaunchBroadcast} 
+                className="btn btn-primary btn-lg btn-block"
+                disabled={missingFields.length > 0}
+                style={{
+                  cursor: missingFields.length > 0 ? 'not-allowed' : 'pointer',
+                  opacity: missingFields.length > 0 ? 0.6 : 1
+                }}
+              >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" stroke-linejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3"></polygon>
                 </svg>
@@ -1542,7 +1747,14 @@ function App() {
                 <button 
                   onClick={handleBulkSend} 
                   className="btn btn-primary btn-sm"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                  style={{ 
+                    display: 'inline-flex', 
+                    alignItems: 'center', 
+                    gap: '0.5rem',
+                    cursor: missingFields.length > 0 ? 'not-allowed' : 'pointer',
+                    opacity: missingFields.length > 0 ? 0.6 : 1
+                  }}
+                  disabled={missingFields.length > 0}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" stroke-linejoin="round">
                     <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -1721,8 +1933,12 @@ function App() {
                             <button 
                               onClick={() => handleSendSingle(rec.id)} 
                               className="btn btn-secondary btn-sm"
-                              disabled={rec.parent_response === 'Interested'}
-                              title={rec.parent_response === 'Interested' ? "Parent has confirmed interest" : ""}
+                              disabled={rec.parent_response === 'Interested' || missingFields.length > 0}
+                              title={
+                                rec.parent_response === 'Interested' 
+                                  ? "Parent has confirmed interest" 
+                                  : (missingFields.length > 0 ? "Spreadsheet is missing required headers" : "")
+                              }
                             >
                               {rec.campaign_status === 'Pending' ? 'Send' : 'Resend'}
                             </button>

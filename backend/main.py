@@ -57,6 +57,9 @@ class TemplatePayload(BaseModel):
 class SetActiveTemplatePayload(BaseModel):
     template_name: str = Field(..., description="Name of the template to set active")
 
+class AddTemplatePayload(BaseModel):
+    template_name: str = Field(..., description="Name of the template to fetch from Meta and add to the database")
+
 class BulkSendPayload(BaseModel):
     record_ids: List[int]
 
@@ -121,7 +124,8 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     record_id=record.id,
                     template_name=template_name,
                     campaign_status="Pending",
-                    delivery_status="Unsent"
+                    delivery_status="Unsent",
+                    parent_response="No Response"
                 )
                 db.add(log_obj)
 
@@ -133,19 +137,25 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 msg_body = msg_body.replace("[Selected Branch]", record.selected_branch)
                 msg_body = msg_body.replace("[Phone Number]", record.phone_number)
 
+                # Merge spreadsheet custom fields with default fallback mapping
+                record_vars = record.variables or {}
+                fallback_vars = {
+                    "student_name": record.student_name,
+                    "parent_name": record.parent_name,
+                    "selected_branch": record.selected_branch,
+                    "student": record.student_name,
+                    "parent": record.parent_name,
+                    "branch": record.selected_branch,
+                    "status": record.selected_branch,
+                }
+                merged_vars = {**fallback_vars, **record_vars}
+
                 response = await whatsapp_client.send_message(
                     to_phone=record.phone_number,
                     message_body=msg_body,
                     media_type=media_type,
                     media_url=media_url,
-                    template_variables={
-                        "student": record.student_name,
-                        "branch": record.selected_branch,
-                        "status": record.selected_branch,
-                        "student_name": record.student_name,
-                        "selected_branch": record.selected_branch,
-                        "parent_name": record.parent_name
-                    },
+                    template_variables=merged_vars,
                     template_name=template_name,
                     template_language=template_language,
                     variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
@@ -168,9 +178,9 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 log_obj.delivery_status = "Failed"
             
             # Sync to legacy Record model columns for real-time visibility
-            record.campaign_status = log_obj.campaign_status
-            record.delivery_status = log_obj.delivery_status
-            record.parent_response = log_obj.parent_response
+            record.campaign_status = log_obj.campaign_status or "Failed"
+            record.delivery_status = log_obj.delivery_status or "Failed"
+            record.parent_response = log_obj.parent_response or "No Response"
             record.message_id = log_obj.message_id
             record.sent_template = log_obj.template_name
             record.sent_at = log_obj.sent_at
@@ -234,7 +244,8 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     record_id=record.id,
                     template_name=template_name,
                     campaign_status="Pending",
-                    delivery_status="Unsent"
+                    delivery_status="Unsent",
+                    parent_response="No Response"
                 )
                 db.add(log_obj)
 
@@ -246,19 +257,25 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 msg_body = msg_body.replace("[Selected Branch]", record.selected_branch)
                 msg_body = msg_body.replace("[Phone Number]", record.phone_number)
 
+                # Merge spreadsheet custom fields with default fallback mapping
+                record_vars = record.variables or {}
+                fallback_vars = {
+                    "student_name": record.student_name,
+                    "parent_name": record.parent_name,
+                    "selected_branch": record.selected_branch,
+                    "student": record.student_name,
+                    "parent": record.parent_name,
+                    "branch": record.selected_branch,
+                    "status": record.selected_branch,
+                }
+                merged_vars = {**fallback_vars, **record_vars}
+
                 response = await whatsapp_client.send_message(
                     to_phone=record.phone_number,
                     message_body=msg_body,
                     media_type=media_type,
                     media_url=media_url,
-                    template_variables={
-                        "student": record.student_name,
-                        "branch": record.selected_branch,
-                        "status": record.selected_branch,
-                        "student_name": record.student_name,
-                        "selected_branch": record.selected_branch,
-                        "parent_name": record.parent_name
-                    },
+                    template_variables=merged_vars,
                     template_name=template_name,
                     template_language=template_language,
                     variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
@@ -281,9 +298,9 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 log_obj.delivery_status = "Failed"
             
             # Sync to legacy Record model columns for real-time visibility
-            record.campaign_status = log_obj.campaign_status
-            record.delivery_status = log_obj.delivery_status
-            record.parent_response = log_obj.parent_response
+            record.campaign_status = log_obj.campaign_status or "Failed"
+            record.delivery_status = log_obj.delivery_status or "Failed"
+            record.parent_response = log_obj.parent_response or "No Response"
             record.message_id = log_obj.message_id
             record.sent_template = log_obj.template_name
             record.sent_at = log_obj.sent_at
@@ -497,17 +514,11 @@ async def upload_records(
         elif col in ["phone number", "phone_number", "phone", "mobile", "mobile number", "contact", "phone_no"]:
             phone_col = df.columns[i]
 
-    missing = []
-    if not student_col: missing.append("Student Name")
-    if not parent_col: missing.append("Parent Name")
-    if not branch_col: missing.append("Selected Branch")
-    if not phone_col: missing.append("Phone Number")
-    
-    if missing:
-        logger.warning(f"upload_records: missing columns {missing}")
+    if not phone_col:
+        logger.warning("upload_records: Phone Number column is missing")
         raise HTTPException(
             status_code=400,
-            detail=f"Required columns missing: {', '.join(missing)}. Please verify your spreadsheet layout."
+            detail="Phone Number column is missing. Please verify your spreadsheet contains a phone number header."
         )
 
     phone_numbers = []
@@ -528,19 +539,41 @@ async def upload_records(
             # Skip invalid phone numbers
             continue
             
-        student_name = str(row[student_col]).strip()
-        parent_name = str(row[parent_col]).strip()
-        branch = str(row[branch_col]).strip()
+        student_name = str(row[student_col]).strip() if student_col and not pd.isna(row[student_col]) else "N/A"
+        parent_name = str(row[parent_col]).strip() if parent_col and not pd.isna(row[parent_col]) else "N/A"
+        branch = str(row[branch_col]).strip() if branch_col and not pd.isna(row[branch_col]) else "N/A"
         
-        if not student_name or not parent_name:
-            continue
-            
+        if student_name.lower() == "nan": student_name = "N/A"
+        if parent_name.lower() == "nan": parent_name = "N/A"
+        if branch.lower() == "nan": branch = "N/A"
+        
+        # Build the dynamic variables dictionary from the row
+        row_variables = {}
+        for col in df.columns:
+            val = row[col]
+            if not pd.isna(val):
+                cleaned_val = str(val).strip()
+                row_variables[str(col).strip().lower()] = cleaned_val
+                # Normalize key to also map synonyms inside JSON for easier fallback
+                norm_col = str(col).strip().lower().replace("_", "").replace(" ", "")
+                if norm_col in ["studentname", "student", "candidatename", "candidate"]:
+                    row_variables["student_name"] = cleaned_val
+                    row_variables["student"] = cleaned_val
+                elif norm_col in ["parentname", "parent", "fathername", "mothername", "guardianname", "guardian"]:
+                    row_variables["parent_name"] = cleaned_val
+                    row_variables["parent"] = cleaned_val
+                elif norm_col in ["selectedbranch", "branch", "course", "selectedcourse", "status", "admissionstatus"]:
+                    row_variables["selected_branch"] = cleaned_val
+                    row_variables["branch"] = cleaned_val
+                    row_variables["status"] = cleaned_val
+        
         phone_numbers.append(cleaned_phone)
         records_to_process.append({
             "student_name": student_name,
             "parent_name": parent_name,
             "selected_branch": branch,
-            "phone_number": cleaned_phone
+            "phone_number": cleaned_phone,
+            "variables": row_variables
         })
 
     if not records_to_process:
@@ -565,6 +598,7 @@ async def upload_records(
             rec.student_name = record_data["student_name"]
             rec.parent_name = record_data["parent_name"]
             rec.selected_branch = record_data["selected_branch"]
+            rec.variables = record_data["variables"]
             rec.campaign_status = "Pending"
             rec.delivery_status = "Unsent"
             rec.parent_response = "No Response"
@@ -581,13 +615,22 @@ async def upload_records(
                 parent_name=record_data["parent_name"],
                 selected_branch=record_data["selected_branch"],
                 phone_number=phone,
+                variables=record_data["variables"],
                 campaign_status="Pending",
                 delivery_status="Unsent",
                 parent_response="No Response"
             )
             db.add(rec)
             added_count += 1
-            
+    # Delete existing campaign logs for these records to reset stats for fresh campaigns
+    stmt = select(Record.id).where(Record.phone_number.in_(phone_numbers))
+    res = await db.execute(stmt)
+    record_ids_to_reset = res.scalars().all()
+    if record_ids_to_reset:
+        from database import CampaignLog
+        from sqlalchemy import delete
+        await db.execute(delete(CampaignLog).where(CampaignLog.record_id.in_(record_ids_to_reset)))
+
     logger.info("upload_records: committing to database...")
     await db.commit()
     logger.info("upload_records: commit successful!")
@@ -815,21 +858,17 @@ async def sync_templates_from_meta(
                     if header_format in ["IMAGE", "DOCUMENT", "VIDEO"]:
                         media_type = header_format.lower()
                         
-            # Determine default variable names list based on text analysis or placeholders
-            if name == "parent_outreach":
-                variable_names = "parent_name,student_name,selected_branch"
-                language = "en"
-            elif name == "admission_outreach":
-                variable_names = "student,status"
-                language = "en_US"
-            else:
-                # Count placeholders (e.g. {{1}}, {{2}}...)
-                import re
-                placeholders = re.findall(r"\{\{(\d+)\}\}", body_text)
-                if placeholders:
-                    variable_names = ",".join([f"var_{p}" for p in placeholders])
-                else:
-                    variable_names = ""
+            # Determine default variable names list based on text analysis of double curly braces placeholders
+            import re
+            parsed_vars = re.findall(r"\{\{([^}]+)\}\}", body_text)
+            seen = set()
+            unique_vars = []
+            for v in parsed_vars:
+                v_clean = v.strip()
+                if v_clean and v_clean not in seen:
+                    seen.add(v_clean)
+                    unique_vars.append(v_clean)
+            variable_names = ",".join(unique_vars)
                     
             templates_data.append({
                 "name": name,
@@ -887,6 +926,180 @@ async def sync_templates_from_meta(
         "status": "success",
         "synced": synced_count,
         "message": f"Successfully synced {synced_count} pre-approved templates from Meta."
+    }
+
+@app.post("/api/v1/templates/add")
+async def add_template_by_name(
+    payload: AddTemplatePayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Fetches a specific message template from Meta Cloud API (or mocks it) by name and adds it to the database."""
+    client_type = request.headers.get("x-whatsapp-client-type") or os.getenv("WHATSAPP_CLIENT_TYPE", "mock")
+    template_name = payload.template_name.strip()
+    
+    if not template_name:
+        raise HTTPException(status_code=400, detail="Template name cannot be empty.")
+        
+    if client_type == "mock":
+        # Check if it's one of our seeded mock templates
+        mock_templates = {
+            "parent_outreach": {
+                "name": "parent_outreach",
+                "category": "MARKETING",
+                "language": "en",
+                "text": "*_Dr. RVR NRI INSTITUTE OF TECHNOLOGY_*\n\nDear {{parent_name}}, greetings from College Admissions. Your child {{student_name}} has been selected for the {{selected_branch}} branch. To block the seat, please pay the ₹50,000 advance fee. Click below to confirm",
+                "media_type": "image",
+                "media_url": "https://raw.githubusercontent.com/Hitesh-Chowdary/WhatsappMsg/main/frontend/static/media/logo.jpg",
+                "variable_names": "parent_name,student_name,selected_branch"
+            },
+            "admission_outreach": {
+                "name": "admission_outreach",
+                "category": "MARKETING",
+                "language": "en_US",
+                "text": "Dear {{student}}, thank you for choosing our college. Your admission status for {{status}} is confirmed.",
+                "media_type": "none",
+                "media_url": None,
+                "variable_names": "student,status"
+            },
+            "demo": {
+                "name": "demo",
+                "category": "MARKETING",
+                "language": "en",
+                "text": "Testing the message",
+                "media_type": "none",
+                "media_url": None,
+                "variable_names": ""
+            }
+        }
+        
+        if template_name in mock_templates:
+            t_data = mock_templates[template_name]
+        else:
+            # Create a dynamic mock template with two placeholders
+            t_data = {
+                "name": template_name,
+                "category": "MARKETING",
+                "language": "en",
+                "text": f"Mock template: {template_name} with parameters: student {{1}} status {{2}}",
+                "media_type": "none",
+                "media_url": None,
+                "variable_names": "student,status"
+            }
+    else:
+        # Pull from actual Meta API
+        access_token = os.getenv("META_ACCESS_TOKEN")
+        business_account_id = os.getenv("META_BUSINESS_ACCOUNT_ID")
+        
+        if not access_token or not business_account_id:
+            raise HTTPException(status_code=400, detail="Meta business account details not configured in environment variables.")
+            
+        import httpx
+        url = f"https://graph.facebook.com/v25.0/{business_account_id}/message_templates"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.get(url, headers=headers, timeout=15.0)
+                if res.status_code != 200:
+                    raise HTTPException(status_code=res.status_code, detail=f"Meta template fetch failed: {res.text}")
+                meta_data = res.json().get("data", [])
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching templates from Meta: {e}")
+            raise HTTPException(status_code=500, detail=f"Network error: {str(e)}")
+            
+        target_template = None
+        for item in meta_data:
+            if item.get("name") == template_name:
+                # Prioritize approved, but fall back to whatever is there
+                if item.get("status") == "APPROVED":
+                    target_template = item
+                    break
+                else:
+                    target_template = item
+                    
+        if not target_template:
+            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found on Meta Business Manager.")
+            
+        components = target_template.get("components", [])
+        body_text = ""
+        media_type = "none"
+        
+        for comp in components:
+            comp_type = comp.get("type")
+            if comp_type == "BODY":
+                body_text = comp.get("text", "")
+            elif comp_type == "HEADER":
+                header_format = comp.get("format")
+                if header_format in ["IMAGE", "DOCUMENT", "VIDEO"]:
+                    media_type = header_format.lower()
+                    
+        import re
+        parsed_vars = re.findall(r"\{\{([^}]+)\}\}", body_text)
+        seen = set()
+        unique_vars = []
+        for v in parsed_vars:
+            v_clean = v.strip()
+            if v_clean and v_clean not in seen:
+                seen.add(v_clean)
+                unique_vars.append(v_clean)
+        
+        t_data = {
+            "name": target_template.get("name"),
+            "category": target_template.get("category"),
+            "language": target_template.get("language"),
+            "text": body_text,
+            "media_type": media_type,
+            "media_url": None,
+            "variable_names": ",".join(unique_vars)
+        }
+        
+    # Save/upsert template into database
+    stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == t_data["name"])
+    res = await db.execute(stmt)
+    tmpl = res.scalars().first()
+    
+    if not tmpl:
+        tmpl = CampaignTemplate(
+            template_name=t_data["name"],
+            template_text=t_data["text"],
+            category=t_data["category"],
+            language=t_data["language"],
+            media_type=t_data["media_type"],
+            media_url=t_data["media_url"],
+            variable_names=t_data["variable_names"],
+            is_active=False
+        )
+        db.add(tmpl)
+    else:
+        tmpl.template_text = t_data["text"]
+        tmpl.category = t_data["category"]
+        tmpl.language = t_data["language"]
+        tmpl.media_type = t_data["media_type"]
+        tmpl.variable_names = t_data["variable_names"]
+        
+    # Set all templates to inactive first, then make this new one active!
+    await db.execute(text("UPDATE campaign_templates SET is_active = false"))
+    tmpl.is_active = True
+    
+    await db.commit()
+    
+    return {
+        "status": "success",
+        "template": {
+            "template_name": tmpl.template_name,
+            "template_text": tmpl.template_text,
+            "category": tmpl.category,
+            "media_type": tmpl.media_type,
+            "media_url": tmpl.media_url,
+            "language": tmpl.language,
+            "variable_names": tmpl.variable_names,
+            "is_active": tmpl.is_active
+        },
+        "message": f"Successfully fetched and set '{tmpl.template_name}' as active template."
     }
 
 @app.post("/api/v1/template/upload-media")
@@ -1088,26 +1301,33 @@ async def send_single_message(
             record_id=record.id,
             template_name=template_name,
             campaign_status="Pending",
-            delivery_status="Unsent"
+            delivery_status="Unsent",
+            parent_response="No Response"
         )
         db.add(log_obj)
 
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
     try:
+        # Merge spreadsheet custom fields with default fallback mapping
+        record_vars = record.variables or {}
+        fallback_vars = {
+            "student_name": record.student_name,
+            "parent_name": record.parent_name,
+            "selected_branch": record.selected_branch,
+            "student": record.student_name,
+            "parent": record.parent_name,
+            "branch": record.selected_branch,
+            "status": record.selected_branch,
+        }
+        merged_vars = {**fallback_vars, **record_vars}
+
         response = await client.send_message(
             to_phone=record.phone_number,
             message_body=msg_body,
             media_type=media_type,
             media_url=media_url,
-            template_variables={
-                "student": record.student_name,
-                "branch": record.selected_branch,
-                "status": record.selected_branch,
-                "student_name": record.student_name,
-                "selected_branch": record.selected_branch,
-                "parent_name": record.parent_name
-            },
+            template_variables=merged_vars,
             template_name=template_name,
             template_language=template_language,
             variable_names=[v.strip() for v in variable_names.split(",") if v.strip()] if variable_names else []
@@ -1123,9 +1343,9 @@ async def send_single_message(
             log_obj.responded_at = None
             
             # Sync to legacy Record model columns for real-time visibility
-            record.campaign_status = log_obj.campaign_status
-            record.delivery_status = log_obj.delivery_status
-            record.parent_response = log_obj.parent_response
+            record.campaign_status = log_obj.campaign_status or "Failed"
+            record.delivery_status = log_obj.delivery_status or "Failed"
+            record.parent_response = log_obj.parent_response or "No Response"
             record.message_id = log_obj.message_id
             record.sent_template = log_obj.template_name
             record.sent_at = log_obj.sent_at
@@ -1749,6 +1969,7 @@ async def trigger_simulation_webhook(
                 message_id=msg_id,
                 campaign_status="Sent",
                 delivery_status="Sent",
+                parent_response="No Response",
                 sent_at=datetime.utcnow()
             )
             db.add(log_obj)

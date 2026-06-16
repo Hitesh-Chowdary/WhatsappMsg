@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
-from sqlalchemy import String, DateTime, func, text, Boolean, ForeignKey
+from sqlalchemy import String, DateTime, func, text, Boolean, ForeignKey, JSON
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -56,6 +56,7 @@ class Record(Base):
     campaign_status: Mapped[str] = mapped_column(String(50), default="Pending")
     delivery_status: Mapped[str] = mapped_column(String(50), default="Unsent")
     parent_response: Mapped[str] = mapped_column(String(50), default="No Response")
+    variables: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     
     # Message Tracking ID from WhatsApp API
     message_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
@@ -173,6 +174,7 @@ async def init_db():
         await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS variable_names VARCHAR(500)"))
         await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT false"))
         await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS sent_template VARCHAR(255)"))
+        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'"))
         
     # Seed default templates if empty
     async with AsyncSessionLocal() as session:

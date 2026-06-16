@@ -165,83 +165,87 @@ class MetaWhatsAppClient(WhatsAppClient):
                 vars_list = [v.strip() for v in var_names_str.split(",") if v.strip()]
 
         # Determine if template uses positional (e.g. {{1}}, {{2}}) or named variables
-        is_positional = False
         if vars_list:
-            if all(v.isdigit() for v in vars_list):
-                is_positional = True
-
-        if template_variables:
-            if vars_list and not is_positional:
-                # Use named parameters based on the list
-                for var_name in vars_list:
+            is_positional = all(v.isdigit() for v in vars_list)
+            
+            # Resolve values for each variable in vars_list
+            resolved_values = {}
+            for var_name in vars_list:
+                val = None
+                if template_variables:
+                    # 1. Direct match
                     val = template_variables.get(var_name)
                     if val is None:
-                        # Fallback mappings for common names
-                        if "student" in var_name:
-                            val = template_variables.get("student_name", "")
-                        elif "parent" in var_name:
-                            val = template_variables.get("parent_name", "")
-                        elif "branch" in var_name or "status" in var_name:
-                            val = template_variables.get("selected_branch", "")
+                        # 2. Case-insensitive, space/underscore ignored match
+                        norm_var = var_name.lower().replace("_", "").replace(" ", "")
+                        for k, v in template_variables.items():
+                            norm_k = str(k).lower().replace("_", "").replace(" ", "")
+                            if norm_k == norm_var:
+                                val = v
+                                break
+                    if val is None:
+                        # 3. Synonym mapping fallbacks
+                        norm_var = var_name.lower().replace("_", "").replace(" ", "")
+                        if norm_var in ["studentname", "student", "candidatename", "candidate"]:
+                            val = template_variables.get("student_name") or template_variables.get("student")
+                        elif norm_var in ["parentname", "parent", "fathername", "mothername", "guardianname", "guardian"]:
+                            val = template_variables.get("parent_name") or template_variables.get("parent")
+                        elif norm_var in ["selectedbranch", "branch", "course", "selectedcourse", "status", "admissionstatus"]:
+                            val = template_variables.get("selected_branch") or template_variables.get("branch") or template_variables.get("status")
+                
+                # If still None, check positional indices or fall back to default string
+                if val is None:
+                    if is_positional and var_name.isdigit():
+                        idx = int(var_name)
+                        if idx == 1:
+                            val = template_variables.get("parent_name") or template_variables.get("parent") or template_variables.get("student_name") or template_variables.get("student") or "Parent"
+                        elif idx == 2:
+                            val = template_variables.get("student_name") or template_variables.get("student") or template_variables.get("selected_branch") or template_variables.get("branch") or "Student"
+                        elif idx == 3:
+                            val = template_variables.get("selected_branch") or template_variables.get("branch") or "Selected"
                         else:
                             val = ""
-                    parameters.append({
-                        "type": "text",
-                        "parameter_name": var_name,
-                        "text": str(val)
-                    })
-            else:
-                # Positional parameters: no parameter_name key
-                if is_positional:
-                    sorted_vars = sorted(vars_list, key=lambda x: int(x) if x.isdigit() else 999)
-                    for var_num in sorted_vars:
-                        val = ""
-                        if var_num.isdigit():
-                            idx = int(var_num)
-                            if idx == 1:
-                                val = template_variables.get("parent_name") or template_variables.get("student_name") or ""
-                            elif idx == 2:
-                                val = template_variables.get("student_name") or template_variables.get("selected_branch") or ""
-                            elif idx == 3:
-                                val = template_variables.get("selected_branch") or ""
+                    else:
+                        norm_var = var_name.lower().replace("_", "").replace(" ", "")
+                        if "student" in norm_var:
+                            val = "Student"
+                        elif "parent" in norm_var:
+                            val = "Parent"
                         else:
-                            val = template_variables.get(var_num, "")
-                        parameters.append({
-                            "type": "text",
-                            "text": str(val)
-                        })
-                else:
-                    for key in ["parent_name", "student_name", "selected_branch"]:
-                        if key in template_variables:
-                            parameters.append({
-                                "type": "text",
-                                "text": str(template_variables[key])
-                            })
-        else:
-            # Fallback parsing from defaults when template_variables is not provided
-            if vars_list and not is_positional:
+                            val = "Selected"
+                            
+                resolved_values[var_name] = str(val)
+
+            # Build components parameters array
+            if is_positional:
+                # Meta positional parameters must be sorted in index order: 1, 2, 3...
+                sorted_keys = sorted(vars_list, key=lambda x: int(x) if x.isdigit() else 999)
+                for k in sorted_keys:
+                    parameters.append({
+                        "type": "text",
+                        "text": resolved_values[k]
+                    })
+            else:
+                # Named parameters require "parameter_name" key
                 for var_name in vars_list:
-                    val = "Student" if "student" in var_name else ("Parent" if "parent" in var_name else "Selected")
                     parameters.append({
                         "type": "text",
                         "parameter_name": var_name,
-                        "text": val
+                        "text": resolved_values[var_name]
                     })
-            else:
-                parameters.append({
-                    "type": "text",
-                    "text": "Student"
-                })
-                parameters.append({
-                    "type": "text",
-                    "text": "Selected"
-                })
 
         components = []
         body_component = {
             "type": "body",
             "parameters": parameters
         }
+        # Only append body component if there are parameters, or if parameters is empty, we can still append body with empty parameters.
+        # Actually, if parameters is empty, it is safer to still append the body component but with empty parameters,
+        # or omit the body component completely. In Meta, for templates with 0 parameters, the API is fine with either omitting
+        # or passing parameters: []. Passing parameters: [] is safer in many SDKs, but let's see.
+        # Let's check: details: "body: number of localizable_params (3) does not match the expected number of params (0)"
+        # This error happened because we sent 3 parameters. If we send 0 parameters, Meta will match it perfectly.
+        # Let's keep body_component in components.
         components.append(body_component)
 
         # Handle header media attachments if any
