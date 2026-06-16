@@ -73,6 +73,12 @@ async def run_tests():
             headers = {"Authorization": f"Bearer {token}", "X-WhatsApp-Client-Type": "mock"}
             logger.info("Authentication successful. Acquired JWT bearer token.")
             
+            # Fetch a template by name since database defaults are now empty
+            logger.info("Testing Fetch Template By Name endpoint (/api/v1/templates/add)...")
+            add_tmpl_res = await client.post("/api/v1/templates/add", json={"template_name": "admission_outreach"}, headers=headers)
+            assert add_tmpl_res.status_code == 200, f"Template addition failed: {add_tmpl_res.text}"
+            logger.info("Successfully fetched and activated admission_outreach test template.")
+            
             # 2. Test Ingestion File Upload API
             logger.info("Testing Excel Ingestion Parser endpoint (/api/v1/upload)...")
             files = {"file": ("test_admissions.csv", csv_bytes, "text/csv")}

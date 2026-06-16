@@ -180,69 +180,8 @@ async def init_db():
     async with AsyncSessionLocal() as session:
         from sqlalchemy import select
         
-        # 1. Clean up any template row without template_name (or rename it to 'parent_outreach')
-        await session.execute(text("UPDATE campaign_templates SET template_name = 'parent_outreach' WHERE template_name IS NULL"))
-        await session.commit()
-        
-        # 2. Seed the required templates
-        templates_to_seed = [
-            (
-                "parent_outreach",
-                "*_Dr. RVR NRI INSTITUTE OF TECHNOLOGY_*\n\nDear {{parent_name}}, greetings from College Admissions. Your child {{student_name}} has been selected for the {{selected_branch}} branch. To block the seat, please pay the ₹50,000 advance fee. Click below to confirm",
-                "en",
-                "MARKETING",
-                "parent_name,student_name,selected_branch",
-                "image",
-                "https://raw.githubusercontent.com/Hitesh-Chowdary/WhatsappMsg/main/frontend/static/media/logo.jpg",
-                True
-            ),
-            (
-                "demo",
-                "Testing the message",
-                "en",
-                "MARKETING",
-                "",
-                "none",
-                None,
-                False
-            ),
-            (
-                "admission_outreach",
-                "Dear {{student}}, thank you for choosing our college. Your admission status for {{status}} is confirmed.",
-                "en_US",
-                "MARKETING",
-                "student,status",
-                "none",
-                None,
-                False
-            )
-        ]
-        
-        for name, text_val, lang, cat, vars_val, media_t, media_u, active in templates_to_seed:
-            stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == name)
-            res = await session.execute(stmt)
-            t = res.scalar_one_or_none()
-            
-            if not t:
-                new_t = CampaignTemplate(
-                    template_name=name,
-                    template_text=text_val,
-                    category=cat,
-                    language=lang,
-                    variable_names=vars_val,
-                    media_type=media_t,
-                    media_url=media_u,
-                    is_active=active
-                )
-                session.add(new_t)
-            else:
-                t.category = cat
-                t.language = lang
-                t.variable_names = vars_val
-                if active:
-                    t.is_active = True
-                    
-        await session.commit()
+        # No default templates seeded to ensure a clean database environment.
+        pass
 
     # Seed default admin user
     async with AsyncSessionLocal() as session:
