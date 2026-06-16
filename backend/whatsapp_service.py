@@ -137,10 +137,14 @@ class MetaWhatsAppClient(WhatsAppClient):
         
         # Build components parameter array
         parameters = []
-        vars_list = variable_names or []
+        vars_list = None
         
-        # If variable names list is empty, try to fetch/parse it from the DB
-        if not vars_list:
+        # If variable_names was explicitly provided as a list, use it
+        if variable_names is not None:
+            vars_list = list(variable_names)
+            
+        # Try to fetch/parse it from the DB if not explicitly passed
+        if vars_list is None:
             try:
                 from database import AsyncSessionLocal, CampaignTemplate
                 from sqlalchemy import select
@@ -149,20 +153,24 @@ class MetaWhatsAppClient(WhatsAppClient):
                     res = await session.execute(stmt)
                     t_obj = res.scalar_one_or_none()
                     if t_obj:
-                        if t_obj.variable_names:
+                        if t_obj.variable_names is not None:
                             vars_list = [v.strip() for v in t_obj.variable_names.split(",") if v.strip()]
                         elif t_obj.template_text:
                             import re
                             parsed_vars = re.findall(r"\{\{([^}]+)\}\}", t_obj.template_text)
                             vars_list = [v.strip() for v in parsed_vars if v.strip()]
+                        else:
+                            vars_list = []
             except Exception as db_err:
                 logger.error(f"Error fetching template variables from DB: {db_err}")
 
-        # If still empty, fall back to environment variable
-        if not vars_list:
+        # If still None, fall back to environment variable
+        if vars_list is None:
             var_names_str = os.getenv("META_TEMPLATE_VARIABLE_NAMES")
             if var_names_str:
                 vars_list = [v.strip() for v in var_names_str.split(",") if v.strip()]
+            else:
+                vars_list = []
 
         # Determine if template uses positional (e.g. {{1}}, {{2}}) or named variables
         if vars_list:
