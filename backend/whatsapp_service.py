@@ -38,7 +38,18 @@ class WhatsAppClient(abc.ABC):
             
         Returns:
             Dict containing sending status and message_id if successful.
-            """
+        """
+        pass
+
+    @abc.abstractmethod
+    async def send_free_form_message(
+        self, 
+        to_phone: str, 
+        message_text: str
+    ) -> Dict[str, Any]:
+        """
+        Send a WhatsApp free-form text message to a candidate within the 24-hour window.
+        """
         pass
 
 
@@ -80,6 +91,23 @@ class MockWhatsAppClient(WhatsAppClient):
             "message_id": message_id,
             "gateway": "MockWhatsAppGateway",
             "sent_at": uuid.uuid4().hex[:8]  # dummy payload details
+        }
+
+    async def send_free_form_message(
+        self, 
+        to_phone: str, 
+        message_text: str
+    ) -> Dict[str, Any]:
+        await asyncio.sleep(0.05)
+        message_id = f"wa_msg_free_{uuid.uuid4().hex[:12]}"
+        logger.info(
+            f"MOCK FREE-FORM DISPATCH -> To: {to_phone} | Message ID: {message_id} | Content: {message_text}"
+        )
+        return {
+            "status": "success",
+            "message_id": message_id,
+            "gateway": "MockWhatsAppGateway",
+            "sent_at": uuid.uuid4().hex[:8]
         }
 
 
@@ -323,6 +351,66 @@ class MetaWhatsAppClient(WhatsAppClient):
                     }
         except Exception as e:
             logger.error(f"Meta request exception occurred: {e}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+
+    async def send_free_form_message(
+        self, 
+        to_phone: str, 
+        message_text: str
+    ) -> Dict[str, Any]:
+        import httpx
+        if not self.access_token or not self.phone_number_id:
+            logger.error("Meta WhatsApp credentials missing in environment.")
+            return {"status": "error", "message": "Meta credentials missing."}
+
+        clean_phone = to_phone.strip().replace("+", "")
+        if clean_phone.startswith("00"):
+            clean_phone = clean_phone[2:]
+            
+        url = f"https://graph.facebook.com/v25.0/{self.phone_number_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone,
+            "type": "text",
+            "text": {
+                "preview_url": False,
+                "body": message_text
+            }
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                logger.info(f"Dispatching Meta free-form message to {clean_phone}...")
+                res = await client.post(url, json=payload, headers=headers)
+                
+                if res.status_code == 200:
+                    res_data = res.json()
+                    messages = res_data.get("messages", [])
+                    message_id = messages[0].get("id") if messages else f"meta_{uuid.uuid4().hex[:12]}"
+                    logger.info(f"Meta free-form dispatch SUCCESS. Message ID: {message_id}")
+                    return {
+                        "status": "success",
+                        "message_id": message_id,
+                        "gateway": "MetaCloudGateway"
+                    }
+                else:
+                    logger.error(f"Meta Cloud API free-form error response: {res.status_code} - {res.text}")
+                    return {
+                        "status": "error",
+                        "code": res.status_code,
+                        "message": res.text
+                    }
+        except Exception as e:
+            logger.error(f"Meta free-form request exception occurred: {e}")
             return {
                 "status": "error",
                 "message": str(e)

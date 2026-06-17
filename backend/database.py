@@ -160,6 +160,54 @@ class AdminUser(Base):
     username: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
 
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("records.id", ondelete="CASCADE"), nullable=False, index=True)
+    sender: Mapped[str] = mapped_column(String(50), nullable=False)
+    message_text: Mapped[str] = mapped_column(String, nullable=False)
+    media_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    message_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "record_id": self.record_id,
+            "sender": self.sender,
+            "message_text": self.message_text,
+            "media_url": self.media_url,
+            "message_id": self.message_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+class AutoReplyRule(Base):
+    __tablename__ = "auto_reply_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    keyword: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    reply_text: Mapped[str] = mapped_column(String, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "keyword": self.keyword,
+            "reply_text": self.reply_text,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
 async def init_db():
     """Initializes the database schema by creating required tables and seeding default template."""
     async with engine.begin() as conn:
@@ -182,6 +230,34 @@ async def init_db():
         
         # No default templates seeded to ensure a clean database environment.
         pass
+
+    # Seed default auto-reply rules if empty
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select
+        stmt = select(AutoReplyRule)
+        res = await session.execute(stmt)
+        rules = res.scalars().all()
+        if not rules:
+            default_rules = [
+                AutoReplyRule(
+                    keyword="default",
+                    reply_text="Thank you for contacting our Admissions Portal! A counselor has been notified and will respond to you shortly. Feel free to ask about fees, hostel, or eligibility."
+                ),
+                AutoReplyRule(
+                    keyword="fees",
+                    reply_text="Our annual tuition fees vary by department. Standard engineering branch fee is ₹1,20,000/year, and management/degree courses are ₹80,000/year. Scholarships are available for meritorious students."
+                ),
+                AutoReplyRule(
+                    keyword="hostel",
+                    reply_text="We offer comfortable on-campus hostel facilities for both boys and girls with 24/7 security, Wi-Fi, laundry, and dining. Hostel fee starts at ₹75,000/year."
+                ),
+                AutoReplyRule(
+                    keyword="eligibility",
+                    reply_text="For Bachelor courses, candidates must have passed 10+2 with a minimum of 50% aggregate marks. Direct admission under Management quota is open. Please submit your board marksheets for review."
+                )
+            ]
+            session.add_all(default_rules)
+            await session.commit()
 
     # Seed default admin user
     async with AsyncSessionLocal() as session:

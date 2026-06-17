@@ -305,6 +305,80 @@ async def run_tests():
             logger.info(f"Safeguard endpoint response: {safeguard_res['message']}")
             assert "1 records" in safeguard_res["message"] or "1 record" in safeguard_res["message"], f"Expected 1 eligible record in response, got: {safeguard_res['message']}"
 
+            # 14. Test Fetch Recent Chats Endpoint
+            logger.info("Testing Fetch Recent Chats Endpoint (/api/v1/chat/recent)...")
+            chat_recent_res = await client.get("/api/v1/chat/recent", headers=headers)
+            assert chat_recent_res.status_code == 200, f"Fetch recent chats failed: {chat_recent_res.text}"
+            recent_chats = chat_recent_res.json()
+            logger.info(f"Successfully retrieved recent chats. Count: {len(recent_chats)}")
+            
+            # 15. Test Fetch Chat History
+            target_record_id = test_record["id"]
+            logger.info(f"Testing Fetch Chat History for Record ID {target_record_id} (/api/v1/chat/history/{target_record_id})...")
+            chat_hist_res = await client.get(f"/api/v1/chat/history/{target_record_id}", headers=headers)
+            assert chat_hist_res.status_code == 200, f"Fetch chat history failed: {chat_hist_res.text}"
+            history = chat_hist_res.json()
+            logger.info(f"Successfully retrieved chat history. Messages count: {len(history)}")
+            
+            # 16. Test Send Counselor Free-Form Message
+            logger.info("Testing Send Manual Counselor Message (/api/v1/chat/send)...")
+            send_payload = {
+                "record_id": target_record_id,
+                "message_text": "Hello, thank you for showing interest in admissions! How can I help you today?"
+            }
+            send_msg_res = await client.post("/api/v1/chat/send", json=send_payload, headers=headers)
+            assert send_msg_res.status_code == 200, f"Send manual message failed: {send_msg_res.text}"
+            send_msg_data = send_msg_res.json()
+            assert send_msg_data["status"] == "success", "Expected success status in message sending response"
+            logger.info("Confirmed: Counselor manual reply dispatched and recorded in database.")
+            
+            # 17. Test Auto-Reply Rules CRUD Endpoints
+            logger.info("Testing Auto-Reply Rules CRUD endpoints (/api/v1/chat/rules)...")
+            rules_res = await client.get("/api/v1/chat/rules", headers=headers)
+            assert rules_res.status_code == 200, f"Fetch rules failed: {rules_res.text}"
+            initial_rules = rules_res.json()
+            logger.info(f"Initial rules list fetched. Count: {len(initial_rules)}")
+            
+            new_rule_payload = {
+                "keyword": "scholarship",
+                "reply_text": "We offer up to 100% tuition fee waiver for top board scorers and sports quota candidates. Please submit your certificates."
+            }
+            add_rule_res = await client.post("/api/v1/chat/rules", json=new_rule_payload, headers=headers)
+            assert add_rule_res.status_code == 200, f"Add rule failed: {add_rule_res.text}"
+            added_rule = add_rule_res.json()["rule"]
+            assert added_rule["keyword"] == "scholarship", f"Expected rule keyword 'scholarship', got {added_rule['keyword']}"
+            
+            # 18. Test Webhook Ingestion & Chatbot Reply Trigger
+            logger.info("Testing Webhook Ingestion with simulated custom student reply...")
+            sim_student_text_payload = {
+                "event": "incoming_text",
+                "message_id": "wa_sim_test_msg_999",
+                "from_phone": test_record["phone_number"],
+                "text_body": "Can you tell me about scholarship criteria?"
+            }
+            webhook_text_res = await client.post("/api/v1/whatsapp/webhook", json=sim_student_text_payload)
+            assert webhook_text_res.status_code == 200, f"Webhook text post failed: {webhook_text_res.text}"
+            logger.info("Webhook text reply processed. Checking if chatbot auto-responded...")
+            
+            # Fetch chat history again to verify the chatbot's reply was logged
+            chat_hist_after_res = await client.get(f"/api/v1/chat/history/{target_record_id}", headers=headers)
+            history_after = chat_hist_after_res.json()
+            
+            # We expect two new messages in history: the student's question and the bot's auto-reply!
+            parent_msg = next((m for m in history_after if m["message_id"] == "wa_sim_test_msg_999"), None)
+            assert parent_msg is not None, "Simulated student message was not found in chat history"
+            
+            # The bot's message should follow the parent message and match the scholarship rule text
+            bot_msg = next((m for m in history_after if m["sender"] == "system" and "fee waiver" in m["message_text"]), None)
+            assert bot_msg is not None, "Chatbot automated reply was not found in chat history"
+            logger.info(f"Confirmed: Chatbot matched keyword 'scholarship' and auto-replied: '{bot_msg['message_text']}'")
+            
+            # Clean up: delete test rule
+            logger.info("Cleaning up: Deleting test auto-reply rule...")
+            delete_res = await client.delete(f"/api/v1/chat/rules/{added_rule['id']}", headers=headers)
+            assert delete_res.status_code == 200, f"Delete rule failed: {delete_res.text}"
+            logger.info("Cleanup completed successfully.")
+
             logger.info("All integration tests PASSED successfully.")
             
         except AssertionError as ae:

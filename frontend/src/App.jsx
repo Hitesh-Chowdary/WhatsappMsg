@@ -159,6 +159,161 @@ function App() {
   ]);
   const [simButtonsDisabled, setSimButtonsDisabled] = useState(false);
 
+  // Chat State
+  const [activeView, setActiveView] = useState('outreach'); // 'outreach' or 'chat'
+  const [chatsList, setChatsList] = useState([]);
+  const [activeChatRecordId, setActiveChatRecordId] = useState(null);
+  const [chatHistory, setChatHistory] = useState([]);
+  const [typedMessage, setTypedMessage] = useState('');
+  const [chatSearchText, setChatSearchText] = useState('');
+  const [rulesList, setRulesList] = useState([]);
+  const [newRuleKeyword, setNewRuleKeyword] = useState('');
+  const [newRuleReply, setNewRuleReply] = useState('');
+  const [sendingChat, setSendingChat] = useState(false);
+  const [savingRule, setSavingRule] = useState(false);
+
+  // --- Chat & Auto-Reply API Handlers ---
+  
+  const fetchRecentChats = async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/chat/recent`);
+      if (res.ok) {
+        const data = await res.json();
+        setChatsList(data);
+      }
+    } catch (err) {
+      console.error("Error fetching recent chats:", err);
+    }
+  };
+
+  const fetchChatHistory = async (recordId) => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/chat/history/${recordId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setChatHistory(data);
+      }
+    } catch (err) {
+      console.error("Error fetching chat history:", err);
+    }
+  };
+
+  const sendManualMessage = async () => {
+    if (!typedMessage.trim() || !activeChatRecordId) return;
+    setSendingChat(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/chat/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          record_id: activeChatRecordId,
+          message_text: typedMessage
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTypedMessage('');
+        setChatHistory(prev => [...prev, data.message]);
+        fetchRecentChats();
+      } else {
+        triggerToast(data.detail || "Failed to send message.", "error");
+      }
+    } catch (err) {
+      triggerToast("Error sending message.", "error");
+      console.error(err);
+    } finally {
+      setSendingChat(false);
+    }
+  };
+
+  const fetchAutoReplyRules = async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/chat/rules`);
+      if (res.ok) {
+        const data = await res.json();
+        setRulesList(data);
+      }
+    } catch (err) {
+      console.error("Error fetching rules:", err);
+    }
+  };
+
+  const saveAutoReplyRule = async () => {
+    if (!newRuleKeyword.trim() || !newRuleReply.trim()) {
+      triggerToast("Keyword and reply text cannot be empty.", "error");
+      return;
+    }
+    setSavingRule(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/chat/rules`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          keyword: newRuleKeyword,
+          reply_text: newRuleReply
+        })
+      });
+      if (res.ok) {
+        setNewRuleKeyword('');
+        setNewRuleReply('');
+        triggerToast("Auto-reply rule saved.", "success");
+        fetchAutoReplyRules();
+      } else {
+        const data = await res.json();
+        triggerToast(data.detail || "Failed to save rule.", "error");
+      }
+    } catch (err) {
+      triggerToast("Error saving rule.", "error");
+      console.error(err);
+    } finally {
+      setSavingRule(false);
+    }
+  };
+
+  const deleteAutoReplyRule = async (ruleId) => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/chat/rules/${ruleId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        triggerToast("Auto-reply rule deleted.", "success");
+        fetchAutoReplyRules();
+      } else {
+        triggerToast("Failed to delete rule.", "error");
+      }
+    } catch (err) {
+      triggerToast("Error deleting rule.", "error");
+      console.error(err);
+    }
+  };
+
+  // Fetch chats and rules when switching to Chat View
+  useEffect(() => {
+    if (!token || activeView !== 'chat') return;
+    
+    fetchRecentChats();
+    fetchAutoReplyRules();
+    
+    const chatsInterval = setInterval(() => {
+      fetchRecentChats();
+    }, 8000);
+    
+    return () => clearInterval(chatsInterval);
+  }, [token, activeView]);
+
+  // Set up polling for active chat history if one is selected
+  useEffect(() => {
+    if (!token || activeView !== 'chat' || !activeChatRecordId) return;
+    
+    fetchChatHistory(activeChatRecordId);
+    
+    const historyInterval = setInterval(() => {
+      fetchChatHistory(activeChatRecordId);
+    }, 4000);
+    
+    return () => clearInterval(historyInterval);
+  }, [token, activeView, activeChatRecordId]);
+
   // Notifications State
   const [toasts, setToasts] = useState([]);
 
@@ -1148,8 +1303,26 @@ function App() {
           </div>
         </header>
 
-        {/* Analytics statistical counters grid */}
-        <section className="analytics-grid">
+        {/* Tab Navigation */}
+        <div className="tab-navigation">
+          <button 
+            className={`tab-btn ${activeView === 'outreach' ? 'active' : ''}`}
+            onClick={() => setActiveView('outreach')}
+          >
+            📢 Outreach Dashboard
+          </button>
+          <button 
+            className={`tab-btn ${activeView === 'chat' ? 'active' : ''}`}
+            onClick={() => setActiveView('chat')}
+          >
+            💬 Live Chat & Auto-Reply
+          </button>
+        </div>
+
+        {activeView === 'outreach' ? (
+          <>
+            {/* Analytics statistical counters grid */}
+            <section className="analytics-grid">
           <div className="stat-card">
             <div className="stat-icon icon-blue">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" stroke-linejoin="round">
@@ -1980,6 +2153,187 @@ function App() {
             </div>
           </div>
         </section>
+          </>
+        ) : (
+          <div className="chat-container">
+            {/* 1. Recent Chats List Pane */}
+            <div className="glass-panel chat-list-panel">
+              <div className="chat-search-wrapper">
+                <input 
+                  type="text" 
+                  placeholder="Search students..." 
+                  className="chat-search-input"
+                  value={chatSearchText}
+                  onChange={(e) => setChatSearchText(e.target.value)}
+                />
+              </div>
+              <div className="conversations-scrollable">
+                {chatsList.filter(chat => 
+                  chat.record.student_name.toLowerCase().includes(chatSearchText.toLowerCase()) ||
+                  chat.record.phone_number.includes(chatSearchText)
+                ).map(chat => {
+                  const isActive = chat.record.id === activeChatRecordId;
+                  const lastMsg = chat.last_message;
+                  const initials = chat.record.student_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+                  const lastMsgTime = lastMsg ? new Date(lastMsg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+                  return (
+                    <div 
+                      key={chat.record.id} 
+                      className={`conversation-item ${isActive ? 'active' : ''}`}
+                      onClick={() => {
+                        setActiveChatRecordId(chat.record.id);
+                        fetchChatHistory(chat.record.id);
+                      }}
+                    >
+                      <div className="avatar-circle">{initials}</div>
+                      <div className="conv-details">
+                        <div className="conv-name-row">
+                          <span className="conv-name">{chat.record.student_name}</span>
+                          <span className="conv-time">{lastMsgTime}</span>
+                        </div>
+                        <p className="conv-msg-preview">{lastMsg ? lastMsg.message_text : 'No messages yet'}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+                {chatsList.length === 0 && (
+                  <div className="chat-empty-state">
+                    <p>No active conversations yet.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 2. Active Chat History Thread Pane */}
+            <div className="glass-panel chat-window-panel">
+              {activeChatRecordId ? (
+                <>
+                  <div className="chat-header">
+                    <div className="chat-header-title">
+                      {(() => {
+                        const activeChat = chatsList.find(c => c.record.id === activeChatRecordId);
+                        return (
+                          <>
+                            <h4>{activeChat ? activeChat.record.student_name : 'Loading...'}</h4>
+                            <p className="chat-header-meta">
+                              {activeChat ? `${activeChat.record.phone_number} | Branch: ${activeChat.record.selected_branch}` : ''}
+                            </p>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  <div className="chat-messages-area">
+                    {chatHistory.map((msg, index) => {
+                      const bubbleClass = msg.sender === 'parent' ? 'parent' : msg.sender === 'counselor' ? 'counselor' : 'system';
+                      const senderLabel = msg.sender === 'parent' ? 'Student/Parent' : msg.sender === 'counselor' ? 'Counselor' : 'Bot / Outreach';
+                      const msgTime = new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                      return (
+                        <div key={msg.id || index} className={`message-bubble-row ${bubbleClass}`}>
+                          <div className="message-bubble">{msg.message_text}</div>
+                          <div className="message-meta-info">
+                            <span>{senderLabel}</span> • <span>{msgTime}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {chatHistory.length === 0 && (
+                      <div className="chat-empty-state">
+                        <p>No messages in this chat yet.</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="chat-input-area">
+                    <textarea 
+                      placeholder="Type your response here..." 
+                      className="chat-input-box"
+                      value={typedMessage}
+                      onChange={(e) => setTypedMessage(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          sendManualMessage();
+                        }
+                      }}
+                    />
+                    <button 
+                      className="btn btn-primary"
+                      onClick={sendManualMessage}
+                      disabled={sendingChat || !typedMessage.trim()}
+                    >
+                      {sendingChat ? 'Sending...' : 'Send'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="chat-empty-state">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                  <h4 style={{ marginTop: '1rem', fontWeight: 600 }}>Select a Conversation</h4>
+                  <p>Click a student from the active list to view chat history and reply.</p>
+                </div>
+              )}
+            </div>
+
+            {/* 3. Auto-Reply Configurator Panel */}
+            <div className="glass-panel rules-panel">
+              <div className="panel-header" style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--border-color)' }}>
+                <h4 style={{ fontWeight: 700 }}>Auto-Reply Rules</h4>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>Configure bot responses for student keywords.</p>
+              </div>
+              <div className="rules-list">
+                {rulesList.map(rule => (
+                  <div key={rule.id} className="rule-item">
+                    <div className="rule-header-row">
+                      <span className={`rule-keyword-badge ${rule.keyword === 'default' ? 'default' : ''}`}>
+                        {rule.keyword === 'default' ? 'fallback responder' : `keyword: ${rule.keyword}`}
+                      </span>
+                      {rule.keyword !== 'default' && (
+                        <button 
+                          className="rule-delete-btn"
+                          onClick={() => deleteAutoReplyRule(rule.id)}
+                          title="Delete Rule"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                    <p className="rule-text-preview">{rule.reply_text}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="rule-form">
+                <h5 style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: '0.5rem' }}>Add Auto-Reply Rule</h5>
+                <input 
+                  type="text" 
+                  placeholder="Keyword (e.g. hostel)" 
+                  className="rule-input-field"
+                  value={newRuleKeyword}
+                  onChange={(e) => setNewRuleKeyword(e.target.value)}
+                />
+                <textarea 
+                  placeholder="Auto-response message text..." 
+                  className="rule-input-field"
+                  style={{ height: '70px', resize: 'none' }}
+                  value={newRuleReply}
+                  onChange={(e) => setNewRuleReply(e.target.value)}
+                />
+                <button 
+                  className="btn btn-primary btn-sm" 
+                  style={{ width: '100%' }}
+                  onClick={saveAutoReplyRule}
+                  disabled={savingRule || !newRuleKeyword.trim() || !newRuleReply.trim()}
+                >
+                  {savingRule ? 'Saving...' : 'Add bot rule'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* 3. Slide-Out Developer Webhook Sandbox Drawer */}
@@ -2180,6 +2534,50 @@ function App() {
                 disabled={simButtonsDisabled}
               >
                 Simulate Click: Not Interested
+              </button>
+            </div>
+          </div>
+
+          <div className="simulator-card actions-card">
+            <h5>3. Simulate Custom Text Reply</h5>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+              <input 
+                type="text" 
+                placeholder="Type simulated student reply..." 
+                className="rule-input-field"
+                style={{ marginBottom: 0 }}
+                id="simulatedReplyInput"
+              />
+              <button 
+                onClick={async () => {
+                  const input = document.getElementById("simulatedReplyInput");
+                  if (!input || !input.value.trim() || !selectedRecord) return;
+                  
+                  const randMsgId = 'wa_sim_in_' + Math.random().toString(36).substring(2, 10);
+                  try {
+                    const res = await fetch(`${API_BASE}/api/v1/whatsapp/webhook`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        event: 'incoming_text',
+                        message_id: randMsgId,
+                        from_phone: selectedRecord.phone_number,
+                        text_body: input.value
+                      })
+                    });
+                    if (res.ok) {
+                      triggerToast("Simulated text reply processed.", "success");
+                      input.value = '';
+                      fetchRecentChats();
+                      if (activeChatRecordId) fetchChatHistory(activeChatRecordId);
+                    }
+                  } catch (err) {
+                    console.error(err);
+                  }
+                }}
+                className="btn btn-primary btn-sm"
+              >
+                Send Text
               </button>
             </div>
           </div>

@@ -57,3 +57,23 @@ CREATE TABLE IF NOT EXISTS admin_users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users (username);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+    sender VARCHAR(50) NOT NULL,
+    message_text TEXT NOT NULL,
+    media_url VARCHAR(1000) NULL,
+    message_id VARCHAR(255) UNIQUE NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_record_id ON chat_messages (record_id);
+
+CREATE TABLE IF NOT EXISTS auto_reply_rules (
+    id SERIAL PRIMARY KEY,
+    keyword VARCHAR(255) UNIQUE NOT NULL,
+    reply_text TEXT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);

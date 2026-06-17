@@ -23,7 +23,7 @@ PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 if BACKEND_DIR not in sys.path:
     sys.path.append(BACKEND_DIR)
 
-from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser, CampaignLog
+from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser, CampaignLog, ChatMessage, AutoReplyRule
 from whatsapp_service import get_whatsapp_client, WhatsAppClient
 
 # Configure logging
@@ -37,10 +37,12 @@ os.makedirs(os.path.join(PROJECT_ROOT, "frontend", "static", "js"), exist_ok=Tru
 
 # Payload models
 class WebhookPayload(BaseModel):
-    event: str = Field(..., description="'status_update' or 'quick_reply'")
+    event: str = Field(..., description="'status_update', 'quick_reply', or 'incoming_text'")
     message_id: str = Field(..., description="Unique message tracking identifier from provider")
     status: Optional[str] = Field(None, description="'sent', 'delivered', 'read', or 'failed'")
     button_text: Optional[str] = Field(None, description="'Interested' or 'Not Interested'")
+    text_body: Optional[str] = Field(None, description="Raw text message body for incoming replies")
+    from_phone: Optional[str] = Field(None, description="Sender's phone number")
 
 class SimulationPayload(BaseModel):
     record_id: int
@@ -62,6 +64,15 @@ class AddTemplatePayload(BaseModel):
 
 class BulkSendPayload(BaseModel):
     record_ids: List[int]
+
+class SendMessagePayload(BaseModel):
+    record_id: int
+    message_text: str
+
+class AutoReplyRulePayload(BaseModel):
+    keyword: str
+    reply_text: str
+    is_active: Optional[bool] = True
 
 # Background task for bulk message broadcasting
 async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppClient, base_url: Optional[str] = None):
@@ -169,6 +180,16 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     log_obj.delivered_at = None
                     log_obj.read_at = None
                     log_obj.responded_at = None
+                    
+                    # Log message in chat history
+                    chat_msg = ChatMessage(
+                        record_id=record.id,
+                        sender="system",
+                        message_text=msg_body,
+                        media_url=media_url if media_type != "none" else None,
+                        message_id=response.get("message_id")
+                    )
+                    db.add(chat_msg)
                 else:
                     log_obj.campaign_status = "Failed"
                     log_obj.delivery_status = "Failed"
@@ -289,6 +310,16 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     log_obj.delivered_at = None
                     log_obj.read_at = None
                     log_obj.responded_at = None
+                    
+                    # Log message in chat history
+                    chat_msg = ChatMessage(
+                        record_id=record.id,
+                        sender="system",
+                        message_text=msg_body,
+                        media_url=media_url if media_type != "none" else None,
+                        message_id=response.get("message_id")
+                    )
+                    db.add(chat_msg)
                 else:
                     log_obj.campaign_status = "Failed"
                     log_obj.delivery_status = "Failed"
@@ -1342,6 +1373,16 @@ async def send_single_message(
             log_obj.read_at = None
             log_obj.responded_at = None
             
+            # Log message in chat history
+            chat_msg = ChatMessage(
+                record_id=record.id,
+                sender="system",
+                message_text=msg_body,
+                media_url=media_url if media_type != "none" else None,
+                message_id=response.get("message_id")
+            )
+            db.add(chat_msg)
+            
             # Sync to legacy Record model columns for real-time visibility
             record.campaign_status = log_obj.campaign_status or "Failed"
             record.delivery_status = log_obj.delivery_status or "Failed"
@@ -1461,6 +1502,96 @@ async def process_webhook_event(
     logger.info(f"Updated CampaignLog ID {log.id} status via webhook callback processing.")
     return {"status": "success", "record_id": log.record_id}
 
+# Helper to process incoming text replies and trigger auto-responder
+async def handle_incoming_text_reply(
+    from_phone: str,
+    message_text: str,
+    message_id: str,
+    db: AsyncSession
+) -> Dict[str, Any]:
+    import uuid
+    # 1. Normalize phone number (strip '+', check suffix match)
+    clean_from = from_phone.strip().replace("+", "")
+    
+    # Check suffix match (last 10 digits) to handle international prefix variations
+    stmt = select(Record).where(Record.phone_number.like(f"%{clean_from[-10:]}"))
+    result = await db.execute(stmt)
+    record = result.scalars().first()
+    
+    if not record:
+        # Create a new Record for Direct Inquiry
+        record = Record(
+            student_name=f"Inquirer ({from_phone})",
+            parent_name="Unknown Parent",
+            selected_branch="Direct Inquiry",
+            phone_number=from_phone,
+            campaign_status="Sent",
+            delivery_status="Read",
+            parent_response="No Response"
+        )
+        db.add(record)
+        await db.flush() # Get the new record id
+        
+    # 2. Save incoming message in ChatMessage
+    chat_msg = ChatMessage(
+        record_id=record.id,
+        sender="parent",
+        message_text=message_text,
+        message_id=message_id
+    )
+    db.add(chat_msg)
+    
+    # 3. Check for matching Auto-Reply rule
+    normalized_text = message_text.lower().strip()
+    rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
+    rules_res = await db.execute(rules_stmt)
+    all_rules = rules_res.scalars().all()
+    
+    matched_rule = None
+    # Prioritize non-default keyword match
+    for rule in all_rules:
+        if rule.keyword != "default" and rule.keyword.lower() in normalized_text:
+            matched_rule = rule
+            break
+            
+    # Fallback to default
+    if not matched_rule:
+        matched_rule = next((r for r in all_rules if r.keyword == "default"), None)
+        
+    if matched_rule:
+        whatsapp_client = get_whatsapp_client()
+        response = await whatsapp_client.send_free_form_message(
+            to_phone=from_phone,
+            message_text=matched_rule.reply_text
+        )
+        
+        # Save auto-reply message
+        auto_msg_id = response.get("message_id") if response.get("status") == "success" else f"auto_fail_{uuid.uuid4().hex[:12]}"
+        auto_chat_msg = ChatMessage(
+            record_id=record.id,
+            sender="system",
+            message_text=matched_rule.reply_text,
+            message_id=auto_msg_id
+        )
+        db.add(auto_chat_msg)
+        
+        # Update record response state
+        record.parent_response = f"Replied ({matched_rule.keyword})"
+        record.responded_at = datetime.utcnow()
+        
+        # Mirror updates to latest CampaignLog if it exists
+        log_stmt = select(CampaignLog).where(CampaignLog.record_id == record.id).order_by(CampaignLog.id.desc()).limit(1)
+        log_res = await db.execute(log_stmt)
+        latest_log = log_res.scalars().first()
+        if latest_log:
+            latest_log.parent_response = f"Replied ({matched_rule.keyword})"
+            latest_log.responded_at = record.responded_at
+            latest_log.delivery_status = "Read"
+
+    await db.commit()
+    logger.info(f"Handled incoming reply from {from_phone} successfully. Matched rule: {matched_rule.keyword if matched_rule else 'None'}")
+    return {"status": "success", "record_id": record.id}
+
 # Real-Time Webhook Verification Endpoint (GET)
 @app.get("/api/v1/whatsapp/webhook")
 async def verify_whatsapp_webhook(request: Request):
@@ -1513,16 +1644,15 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         db=db
                     )
                     
-                # 2. Process Interactive & Button Replies
+                # 2. Process Interactive, Button & Text Replies
                 messages = value.get("messages", [])
                 for message in messages:
+                    sender_phone = message.get("from")
+                    msg_id = message.get("id")
                     msg_type = message.get("type")
                     context = message.get("context", {})
                     context_id = context.get("id")
                     
-                    if not context_id:
-                        continue
-                        
                     button_text = None
                     if msg_type == "button":
                         button_text = message.get("button", {}).get("text")
@@ -1533,16 +1663,27 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         
                     if button_text:
                         button_text = button_text.strip()
+                        normalized_reply = button_text
                         if button_text.lower() in ["interested", "yes"]:
-                            button_text = "Interested"
+                            normalized_reply = "Interested"
                         elif button_text.lower() in ["not interested", "no"]:
-                            button_text = "Not Interested"
+                            normalized_reply = "Not Interested"
                             
-                        if button_text in ["Interested", "Not Interested"]:
+                        # If it is a legacy quick reply click, run legacy handler
+                        if normalized_reply in ["Interested", "Not Interested"] and context_id:
                             await process_webhook_event(
                                 event="quick_reply",
                                 message_id=context_id,
-                                button_text=button_text,
+                                button_text=normalized_reply,
+                                db=db
+                            )
+                        
+                        # Process text message: resolving candidate, logging message, and running chatbot
+                        if sender_phone:
+                            await handle_incoming_text_reply(
+                                from_phone=sender_phone,
+                                message_text=button_text,
+                                message_id=msg_id,
                                 db=db
                             )
         return {"status": "processed"}
@@ -1551,16 +1692,81 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
         # Fallback parsing as WebhookPayload for mock/developer simulation testing
         try:
             payload_obj = WebhookPayload(**body)
-            return await process_webhook_event(
-                event=payload_obj.event,
-                message_id=payload_obj.message_id,
-                status=payload_obj.status,
-                button_text=payload_obj.button_text,
-                db=db
-            )
+            if payload_obj.event == "incoming_text":
+                phone = payload_obj.from_phone or "919999999999"
+                text_content = payload_obj.text_body or "hello"
+                return await handle_incoming_text_reply(
+                    from_phone=phone,
+                    message_text=text_content,
+                    message_id=payload_obj.message_id,
+                    db=db
+                )
+            else:
+                # legacy events (status_update, quick_reply)
+                # If quick_reply, let's also log the incoming text in ChatMessage
+                if payload_obj.event == "quick_reply":
+                    stmt = select(CampaignLog).where(CampaignLog.message_id == payload_obj.message_id)
+                    res = await db.execute(stmt)
+                    log = res.scalars().first()
+                    if log:
+                        chat_msg = ChatMessage(
+                            record_id=log.record_id,
+                            sender="parent",
+                            message_text=payload_obj.button_text or "Interested",
+                            message_id=payload_obj.message_id
+                        )
+                        db.add(chat_msg)
+                        
+                        # Trigger chatbot auto-reply for simulated quick replies too
+                        # Runs handle_incoming_text_reply to mock response flow
+                        rec_stmt = select(Record).where(Record.id == log.record_id)
+                        rec_res = await db.execute(rec_stmt)
+                        rec = rec_res.scalars().first()
+                        if rec:
+                            # Run async trigger without duplicating parent message
+                            normalized_text = (payload_obj.button_text or "Interested").lower().strip()
+                            rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
+                            rules_res = await db.execute(rules_stmt)
+                            all_rules = rules_res.scalars().all()
+                            matched_rule = None
+                            for rule in all_rules:
+                                if rule.keyword != "default" and rule.keyword.lower() in normalized_text:
+                                    matched_rule = rule
+                                    break
+                            if not matched_rule:
+                                matched_rule = next((r for r in all_rules if r.keyword == "default"), None)
+                            if matched_rule:
+                                import uuid
+                                whatsapp_client = get_whatsapp_client()
+                                response = await whatsapp_client.send_free_form_message(
+                                    to_phone=rec.phone_number,
+                                    message_text=matched_rule.reply_text
+                                )
+                                auto_chat_msg = ChatMessage(
+                                    record_id=rec.id,
+                                    sender="system",
+                                    message_text=matched_rule.reply_text,
+                                    message_id=response.get("message_id") if response.get("status") == "success" else f"auto_fail_{uuid.uuid4().hex[:12]}"
+                                )
+                                db.add(auto_chat_msg)
+                                rec.parent_response = f"Replied ({matched_rule.keyword})"
+                                rec.responded_at = datetime.utcnow()
+                                log.parent_response = f"Replied ({matched_rule.keyword})"
+                                log.responded_at = rec.responded_at
+                                log.delivery_status = "Read"
+                
+                return await process_webhook_event(
+                    event=payload_obj.event,
+                    message_id=payload_obj.message_id,
+                    status=payload_obj.status,
+                    button_text=payload_obj.button_text,
+                    db=db
+                )
         except Exception as e:
             logger.error(f"Failed to parse webhook body: {e}")
-            return {"status": "error", "message": "Invalid webhook payload format."}
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": f"Invalid webhook payload format: {str(e)}"}
 
 # Aggregated Stats
 @app.get("/api/v1/stats")
@@ -2014,3 +2220,149 @@ async def trigger_simulation_webhook(
         "simulated_event": webhook_payload.dict(),
         "handler_response": response
     }
+
+# --- Chat & Auto-Reply Rules Endpoints ---
+
+@app.get("/api/v1/chat/recent")
+async def get_recent_chats(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Fetches list of recent chat conversations sorted by latest message timestamp."""
+    # Subquery to find the latest created_at for each record_id
+    subq = select(
+        ChatMessage.record_id,
+        func.max(ChatMessage.created_at).label("max_created")
+    ).group_by(ChatMessage.record_id).subquery()
+    
+    # Main query to join Record, ChatMessage and the max_created subquery
+    stmt = select(Record, ChatMessage).join(
+        ChatMessage, Record.id == ChatMessage.record_id
+    ).join(
+        subq, and_(ChatMessage.record_id == subq.c.record_id, ChatMessage.created_at == subq.c.max_created)
+    ).order_by(subq.c.max_created.desc())
+    
+    result = await db.execute(stmt)
+    rows = result.all()
+    
+    recent_chats = []
+    for rec, msg in rows:
+        recent_chats.append({
+            "record": rec.to_dict(),
+            "last_message": msg.to_dict()
+        })
+    return recent_chats
+
+@app.get("/api/v1/chat/history/{record_id}")
+async def get_chat_history(
+    record_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves full conversation message history for a specific candidate."""
+    stmt = select(ChatMessage).where(ChatMessage.record_id == record_id).order_by(ChatMessage.created_at.asc())
+    res = await db.execute(stmt)
+    messages = res.scalars().all()
+    return [msg.to_dict() for msg in messages]
+
+@app.post("/api/v1/chat/send")
+async def send_manual_chat_message(
+    request: Request,
+    payload: SendMessagePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Dispatches a manual counselor text message to a candidate using WhatsApp Cloud API."""
+    stmt = select(Record).where(Record.id == payload.record_id)
+    res = await db.execute(stmt)
+    record = res.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Candidate record not found.")
+        
+    client_type = request.headers.get("x-whatsapp-client-type")
+    whatsapp_client = get_whatsapp_client(client_type)
+    response = await whatsapp_client.send_free_form_message(
+        to_phone=record.phone_number,
+        message_text=payload.message_text
+    )
+    
+    if response.get("status") != "success":
+        raise HTTPException(status_code=500, detail=response.get("message", "Failed to dispatch WhatsApp free-form reply."))
+        
+    # Log message to chat history
+    chat_msg = ChatMessage(
+        record_id=record.id,
+        sender="counselor",
+        message_text=payload.message_text,
+        message_id=response.get("message_id")
+    )
+    db.add(chat_msg)
+    
+    # Update candidate response state
+    record.parent_response = "Counselor Replied"
+    record.responded_at = datetime.utcnow()
+    
+    # Also mirror update to latest CampaignLog if it exists
+    log_stmt = select(CampaignLog).where(CampaignLog.record_id == record.id).order_by(CampaignLog.id.desc()).limit(1)
+    log_res = await db.execute(log_stmt)
+    latest_log = log_res.scalars().first()
+    if latest_log:
+        latest_log.parent_response = "Counselor Replied"
+        latest_log.responded_at = record.responded_at
+        latest_log.delivery_status = "Read"
+        
+    await db.commit()
+    return {"status": "success", "message": chat_msg.to_dict()}
+
+@app.get("/api/v1/chat/rules")
+async def get_auto_reply_rules(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves all active and inactive chatbot auto-reply rules."""
+    stmt = select(AutoReplyRule).order_by(AutoReplyRule.keyword.asc())
+    res = await db.execute(stmt)
+    rules = res.scalars().all()
+    return [rule.to_dict() for rule in rules]
+
+@app.post("/api/v1/chat/rules")
+async def add_or_update_auto_reply_rule(
+    payload: AutoReplyRulePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Adds a new keyword reply rule or updates an existing one."""
+    keyword_clean = payload.keyword.strip().lower()
+    if not keyword_clean:
+        raise HTTPException(status_code=400, detail="Keyword cannot be empty.")
+        
+    stmt = select(AutoReplyRule).where(AutoReplyRule.keyword == keyword_clean)
+    res = await db.execute(stmt)
+    rule = res.scalar_one_or_none()
+    
+    if rule:
+        rule.reply_text = payload.reply_text
+        rule.is_active = payload.is_active if payload.is_active is not None else True
+    else:
+        rule = AutoReplyRule(
+            keyword=keyword_clean,
+            reply_text=payload.reply_text,
+            is_active=payload.is_active if payload.is_active is not None else True
+        )
+        db.add(rule)
+        
+    await db.commit()
+    return {"status": "success", "rule": rule.to_dict()}
+
+@app.delete("/api/v1/chat/rules/{rule_id}")
+async def delete_auto_reply_rule(
+    rule_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Removes a chatbot auto-reply rule by its unique ID."""
+    from sqlalchemy import delete
+    stmt = delete(AutoReplyRule).where(AutoReplyRule.id == rule_id)
+    await db.execute(stmt)
+    await db.commit()
+    return {"status": "success", "message": f"Rule ID {rule_id} deleted."}
