@@ -1513,3 +1513,79 @@ body {
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
+/* Mobile-only utility button styling */
+.mobile-only-flex {
+    display: none !important;
+}
+
+@media (max-width: 1024px) {
+    .mobile-only-flex {
+        display: inline-flex !important;
+    }
+    
+    /* Adjust app-content padding on smaller screens */
+    .app-content {
+        padding: 1.25rem 1rem !important;
+        gap: 1.25rem;
+    }
+    
+    /* Segmented pill navigation spacing */
+    .tab-navigation {
+        margin-bottom: 1.25rem !important;
+    }
+    
+    /* Statistics counters grid wrapping */
+    .analytics-grid {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
+        gap: 0.75rem;
+    }
+    .stat-card {
+        padding: 1rem !important;
+        gap: 0.75rem;
+    }
+    .stat-value {
+        font-size: 1.35rem !important;
+    }
+    
+    /* Control Center uploader & campaign dispatches */
+    .control-center {
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important;
+        gap: 1.25rem;
+    }
+    
+    /* Live Chat Responsive Single-Pane flow */
+    .chat-container {
+        grid-template-columns: 1fr !important;
+        height: calc(100vh - 180px) !important;
+        gap: 0;
+    }
+    
+    /* Hide panels based on mobile active sub-view classes */
+    .app-wrapper.mobile-view-list .chat-window-panel,
+    .app-wrapper.mobile-view-list .rules-panel {
+        display: none !important;
+    }
+    
+    .app-wrapper.mobile-view-thread .chat-list-panel,
+    .app-wrapper.mobile-view-thread .rules-panel {
+        display: none !important;
+    }
+    
+    .app-wrapper.mobile-view-rules .chat-list-panel,
+    .app-wrapper.mobile-view-rules .chat-window-panel {
+        display: none !important;
+    }
+    
+    /* Adjust spacing inside Live Chat window */
+    .chat-window-panel, .chat-list-panel, .rules-panel {
+        border-radius: var(--radius-md) !important;
+        height: 100% !important;
+    }
+    
+    /* Chat history scroll area sizing */
+    .chat-messages-area {
+        padding: 1rem !important;
+    }
+}
+
+

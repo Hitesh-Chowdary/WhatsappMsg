@@ -61,6 +61,7 @@ class AddTemplatePayload(BaseModel):
 
 class BulkSendPayload(BaseModel):
     record_ids: List[int]
+    template_name: Optional[str] = None
 
 class SendMessagePayload(BaseModel):
     record_id: int
@@ -211,14 +212,21 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
             
     logger.info("Background campaign broadcast completed.")
 
-async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppClient, record_ids: List[int], base_url: Optional[str] = None):
+async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppClient, record_ids: List[int], base_url: Optional[str] = None, template_name: Optional[str] = None):
     logger.info(f"Starting background bulk send campaign for {len(record_ids)} records...")
     async with db_session_factory() as db:
         # Fetch the active template text
-        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
-        tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalars().first()
-        
+        template_obj = None
+        if template_name:
+            tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == template_name).limit(1)
+            tmpl_res = await db.execute(tmpl_stmt)
+            template_obj = tmpl_res.scalars().first()
+            
+        if not template_obj:
+            tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+            tmpl_res = await db.execute(tmpl_stmt)
+            template_obj = tmpl_res.scalars().first()
+            
         # Fallback to first if none active
         if not template_obj:
             tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
@@ -1230,9 +1238,17 @@ async def send_bulk_campaign(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Triggers WhatsApp messages to a specific list of contact IDs in the background."""
-    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
-    tmpl_res = await db.execute(tmpl_stmt)
-    template_obj = tmpl_res.scalars().first()
+    template_obj = None
+    if payload.template_name:
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == payload.template_name).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+
+    if not template_obj:
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+
     if not template_obj:
         tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
         tmpl_res = await db.execute(tmpl_stmt)
@@ -1261,7 +1277,7 @@ async def send_bulk_campaign(
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
     base_url = get_request_base_url(request)
-    background_tasks.add_task(run_bulk_send_campaign, AsyncSessionLocal, client, payload.record_ids, base_url)
+    background_tasks.add_task(run_bulk_send_campaign, AsyncSessionLocal, client, payload.record_ids, base_url, template_name)
     
     return {
         "status": "success",
@@ -1274,6 +1290,7 @@ async def send_bulk_campaign(
 async def send_single_message(
     id: int, 
     request: Request,
+    template_name: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
@@ -1285,10 +1302,17 @@ async def send_single_message(
     if not record:
         raise HTTPException(status_code=404, detail="Student record not found.")
         
-    # Fetch active custom template
-    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
-    tmpl_res = await db.execute(tmpl_stmt)
-    template_obj = tmpl_res.scalars().first()
+    # Fetch custom template
+    template_obj = None
+    if template_name:
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == template_name).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
+
+    if not template_obj:
+        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        template_obj = tmpl_res.scalars().first()
     
     # Fallback to first if none active
     if not template_obj:
@@ -2136,18 +2160,18 @@ async def get_recent_chats(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Fetches list of recent chat conversations sorted by latest message timestamp."""
-    # Subquery to find the latest created_at for each record_id
+    # Subquery to find the latest ChatMessage.id for each record_id
     subq = select(
         ChatMessage.record_id,
-        func.max(ChatMessage.created_at).label("max_created")
+        func.max(ChatMessage.id).label("max_id")
     ).group_by(ChatMessage.record_id).subquery()
     
-    # Main query to join Record, ChatMessage and the max_created subquery
+    # Main query to join Record, ChatMessage and the max_id subquery
     stmt = select(Record, ChatMessage).join(
         ChatMessage, Record.id == ChatMessage.record_id
     ).join(
-        subq, and_(ChatMessage.record_id == subq.c.record_id, ChatMessage.created_at == subq.c.max_created)
-    ).order_by(subq.c.max_created.desc())
+        subq, and_(ChatMessage.record_id == subq.c.record_id, ChatMessage.id == subq.c.max_id)
+    ).order_by(ChatMessage.id.desc())
     
     result = await db.execute(stmt)
     rows = result.all()

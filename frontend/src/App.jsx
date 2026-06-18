@@ -160,6 +160,8 @@ function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [typedMessage, setTypedMessage] = useState('');
   const [chatSearchText, setChatSearchText] = useState('');
+  const [chatBranchFilter, setChatBranchFilter] = useState('all');
+  const [mobileActiveSubView, setMobileActiveSubView] = useState('list'); // 'list', 'thread', 'rules'
   const [rulesList, setRulesList] = useState([]);
   const [newRuleKeyword, setNewRuleKeyword] = useState('');
   const [newRuleReply, setNewRuleReply] = useState('');
@@ -900,7 +902,9 @@ function App() {
   const handleSendSingle = async (id) => {
     triggerToast("Dispatching single campaign request...", "info");
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/campaign/send-single/${id}`, { method: 'POST' });
+      const templateToSend = templateFilter === 'all' ? selectedTemplateName : templateFilter;
+      const url = `${API_BASE}/api/v1/campaign/send-single/${id}${templateToSend ? `?template_name=${encodeURIComponent(templateToSend)}` : ''}`;
+      const res = await authFetch(url, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Single sending failed.");
       
@@ -936,10 +940,14 @@ function App() {
         closeConfirmModal();
         triggerToast("Initiating bulk campaign dispatch...", "info");
         try {
+          const templateToSend = templateFilter === 'all' ? selectedTemplateName : templateFilter;
           const res = await authFetch(`${API_BASE}/api/v1/campaign/send-bulk`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ record_ids: eligibleRecords.map(r => r.id) })
+            body: JSON.stringify({ 
+              record_ids: eligibleRecords.map(r => r.id),
+              template_name: templateToSend
+            })
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Failed to trigger bulk dispatch.");
@@ -1211,7 +1219,7 @@ function App() {
   }
 
   return (
-    <div className="app-wrapper">
+    <div className={`app-wrapper mobile-view-${mobileActiveSubView}`}>
       {/* 2. Main Content View Area */}
       <main className="app-content">
         
@@ -2089,20 +2097,43 @@ function App() {
           <div className="chat-container">
             {/* 1. Recent Chats List Pane */}
             <div className="glass-panel chat-list-panel">
-              <div className="chat-search-wrapper">
-                <input 
-                  type="text" 
-                  placeholder="Search students..." 
-                  className="chat-search-input"
-                  value={chatSearchText}
-                  onChange={(e) => setChatSearchText(e.target.value)}
-                />
+              <div className="chat-search-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%' }}>
+                  <input 
+                    type="text" 
+                    placeholder="Search student, phone..." 
+                    className="chat-search-input"
+                    value={chatSearchText}
+                    onChange={(e) => setChatSearchText(e.target.value)}
+                    style={{ flexGrow: 1 }}
+                  />
+                  <button 
+                    className="btn btn-secondary btn-sm mobile-only-flex" 
+                    onClick={() => setMobileActiveSubView('rules')}
+                    style={{ whiteSpace: 'nowrap', padding: '0.5rem' }}
+                  >
+                    🤖 Rules
+                  </button>
+                </div>
+                <select 
+                  className="filter-select" 
+                  style={{ width: '100%', padding: '0.45rem 0.75rem', fontSize: '0.813rem', height: '34px' }}
+                  value={chatBranchFilter}
+                  onChange={(e) => setChatBranchFilter(e.target.value)}
+                >
+                  <option value="all">All Branches</option>
+                  {branches.map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
               </div>
               <div className="conversations-scrollable">
-                {chatsList.filter(chat => 
-                  chat.record.student_name.toLowerCase().includes(chatSearchText.toLowerCase()) ||
-                  chat.record.phone_number.includes(chatSearchText)
-                ).map(chat => {
+                {chatsList.filter(chat => {
+                  const matchSearch = chat.record.student_name.toLowerCase().includes(chatSearchText.toLowerCase()) ||
+                                      chat.record.phone_number.includes(chatSearchText);
+                  const matchBranch = chatBranchFilter === 'all' || chat.record.selected_branch === chatBranchFilter;
+                  return matchSearch && matchBranch;
+                }).map(chat => {
                   const isActive = chat.record.id === activeChatRecordId;
                   const lastMsg = chat.last_message;
                   const initials = chat.record.student_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
@@ -2114,6 +2145,7 @@ function App() {
                       onClick={() => {
                         setActiveChatRecordId(chat.record.id);
                         fetchChatHistory(chat.record.id);
+                        setMobileActiveSubView('thread');
                       }}
                     >
                       <div className="avatar-circle">{initials}</div>
@@ -2139,8 +2171,15 @@ function App() {
             <div className="glass-panel chat-window-panel">
               {activeChatRecordId ? (
                 <>
-                  <div className="chat-header">
-                    <div className="chat-header-title">
+                  <div className="chat-header" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <button 
+                      className="btn btn-secondary btn-sm mobile-only-flex" 
+                      onClick={() => setMobileActiveSubView('list')}
+                      style={{ padding: '0.4rem 0.6rem' }}
+                    >
+                      ← Back
+                    </button>
+                    <div className="chat-header-title" style={{ flexGrow: 1 }}>
                       {(() => {
                         const activeChat = chatsList.find(c => c.record.id === activeChatRecordId);
                         return (
@@ -2209,9 +2248,18 @@ function App() {
 
             {/* 3. Auto-Reply Configurator Panel */}
             <div className="glass-panel rules-panel">
-              <div className="panel-header" style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--border-color)' }}>
-                <h4 style={{ fontWeight: 700 }}>Auto-Reply Rules</h4>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>Configure bot responses for student keywords.</p>
+              <div className="panel-header" style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button 
+                  className="btn btn-secondary btn-sm mobile-only-flex" 
+                  onClick={() => setMobileActiveSubView('list')}
+                  style={{ padding: '0.4rem 0.6rem' }}
+                >
+                  ← Back
+                </button>
+                <div style={{ flexGrow: 1 }}>
+                  <h4 style={{ fontWeight: 700 }}>Auto-Reply Rules</h4>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>Configure bot responses for student keywords.</p>
+                </div>
               </div>
               <div className="rules-list">
                 {rulesList.map(rule => (
