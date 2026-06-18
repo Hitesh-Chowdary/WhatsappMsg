@@ -44,9 +44,6 @@ class WebhookPayload(BaseModel):
     text_body: Optional[str] = Field(None, description="Raw text message body for incoming replies")
     from_phone: Optional[str] = Field(None, description="Sender's phone number")
 
-class SimulationPayload(BaseModel):
-    record_id: int
-    target_state: str = Field(..., description="'delivered', 'read', 'failed', 'Interested', or 'Not Interested'")
 
 class TemplatePayload(BaseModel):
     template_name: str = Field(..., description="Name of the template")
@@ -2129,97 +2126,7 @@ async def export_records_to_excel(
         headers={"Content-Disposition": "attachment; filename=filtered_contacts.xlsx"}
     )
 
-# Developer Simulation Trigger
 
-# Developer Simulation Trigger
-
-@app.post("/api/v1/simulation/webhook-trigger")
-async def trigger_simulation_webhook(
-    payload: SimulationPayload, 
-    db: AsyncSession = Depends(get_db),
-    current_user: AdminUser = Depends(get_current_user)
-):
-    """Developer helper to simulate asynchronous WhatsApp callbacks for testing."""
-    stmt = select(Record).where(Record.id == payload.record_id)
-    result = await db.execute(stmt)
-    record = result.scalar_one_or_none()
-    
-    if not record:
-        raise HTTPException(status_code=404, detail="Student record not found.")
-        
-    # Fetch active customized template
-    tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
-    tmpl_res = await db.execute(tmpl_stmt)
-    template_obj = tmpl_res.scalars().first()
-    if not template_obj:
-        tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
-        tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalars().first()
-    template_name = template_obj.template_name if template_obj else "admission_outreach"
-
-    log_stmt = select(CampaignLog).where(
-        CampaignLog.record_id == record.id,
-        CampaignLog.template_name == template_name
-    )
-    log_res = await db.execute(log_stmt)
-    log_obj = log_res.scalars().first()
-    
-    if not log_obj or not log_obj.message_id:
-        # Auto-initialize message dispatch for seamless sandbox simulation
-        import uuid
-        msg_id = f"wa_msg_{uuid.uuid4().hex[:12]}"
-        if not log_obj:
-            log_obj = CampaignLog(
-                record_id=record.id,
-                template_name=template_name,
-                message_id=msg_id,
-                campaign_status="Sent",
-                delivery_status="Sent",
-                parent_response="No Response",
-                sent_at=datetime.utcnow()
-            )
-            db.add(log_obj)
-        else:
-            log_obj.message_id = msg_id
-            log_obj.campaign_status = "Sent"
-            log_obj.delivery_status = "Sent"
-            log_obj.sent_at = datetime.utcnow()
-        await db.commit()
-        logger.info(f"Auto-initialized campaign dispatch log for simulation on record ID {record.id}.")
-        
-    target = payload.target_state
-    
-    if target in ["delivered", "read", "failed"]:
-        webhook_payload = WebhookPayload(
-            event="status_update",
-            message_id=log_obj.message_id,
-            status=target
-        )
-    elif target in ["Interested", "Not Interested"]:
-        webhook_payload = WebhookPayload(
-            event="quick_reply",
-            message_id=log_obj.message_id,
-            button_text=target
-        )
-    else:
-        raise HTTPException(
-            status_code=400, 
-            detail="Invalid simulation target state. Choose 'delivered', 'read', 'failed', 'Interested', or 'Not Interested'."
-        )
-        
-    # Internally process using the shared webhook event processor helper
-    response = await process_webhook_event(
-        event=webhook_payload.event,
-        message_id=webhook_payload.message_id,
-        status=webhook_payload.status,
-        button_text=webhook_payload.button_text,
-        db=db
-    )
-    return {
-        "status": "success",
-        "simulated_event": webhook_payload.dict(),
-        "handler_response": response
-    }
 
 # --- Chat & Auto-Reply Rules Endpoints ---
 

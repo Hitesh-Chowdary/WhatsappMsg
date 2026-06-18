@@ -131,10 +131,14 @@ async def run_tests():
             logger.info("Funnel Level 2 (Sent/Undelivered) verified.")
             
             # Simulate Status Callback: Delivered
-            logger.info("Simulating Webhook Status Callback: 'delivered' via sandbox simulation API...")
-            sim_payload = {"record_id": record_id, "target_state": "delivered"}
-            res = await client.post("/api/v1/simulation/webhook-trigger", json=sim_payload, headers=headers)
-            assert res.status_code == 200, f"Simulation webhook failed: {res.text}"
+            logger.info("Simulating Webhook Status Callback: 'delivered' via public webhook...")
+            webhook_payload = {
+                "event": "status_update",
+                "message_id": message_id,
+                "status": "delivered"
+            }
+            res = await client.post("/api/v1/whatsapp/webhook", json=webhook_payload)
+            assert res.status_code == 200, f"Webhook status update failed: {res.text}"
             
             # Funnel Level 2 (Delivered): Verify delivery_status=delivered filter retrieves the record
             res = await client.get("/api/v1/records?delivery_status=delivered", headers=headers)
@@ -147,11 +151,15 @@ async def run_tests():
             assert not any(r["id"] == record_id for r in res.json()["records"]), "read filter returned unread record"
             logger.info("Funnel Level 2 (Delivered) & Level 3 (Not Read) verified.")
             
-            # 5. Test Sandbox Webhook Simulation (Simulate Status Callback: Read)
-            logger.info(f"Simulating Webhook Status Callback: 'read' via sandbox simulation API...")
-            sim_payload = {"record_id": record_id, "target_state": "read"}
-            res = await client.post("/api/v1/simulation/webhook-trigger", json=sim_payload, headers=headers)
-            assert res.status_code == 200, f"Simulation webhook failed: {res.text}"
+            # 5. Test Webhook Status Callback (Simulate Status Callback: Read)
+            logger.info(f"Simulating Webhook Status Callback: 'read' via public webhook...")
+            webhook_payload = {
+                "event": "status_update",
+                "message_id": message_id,
+                "status": "read"
+            }
+            res = await client.post("/api/v1/whatsapp/webhook", json=webhook_payload)
+            assert res.status_code == 200, f"Webhook status update failed: {res.text}"
             
             # Verify record transitioned to Read and filter mapping matches
             res = await client.get("/api/v1/records?delivery_status=read", headers=headers)
@@ -160,24 +168,43 @@ async def run_tests():
             assert not any(r["id"] == record_id for r in res.json()["records"]), "not_read filter returned read record"
             logger.info("Funnel Level 3 (Read) verified.")
             
-            # 6. Test Sandbox Webhook Simulation (Simulate Parent Button Click: Interested)
-            logger.info("Simulating Webhook Quick Reply button click: 'Interested'...")
-            sim_payload = {"record_id": record_id, "target_state": "Interested"}
-            res = await client.post("/api/v1/simulation/webhook-trigger", json=sim_payload, headers=headers)
-            assert res.status_code == 200, f"Simulation webhook response failed: {res.text}"
+            # 6. Test Webhook Quick Reply Callback (Simulate Parent Button Click: Interested)
+            logger.info("Simulating Webhook Quick Reply button click: 'Interested' via public webhook...")
+            webhook_payload = {
+                "event": "quick_reply",
+                "message_id": message_id,
+                "button_text": "Interested"
+            }
+            res = await client.post("/api/v1/whatsapp/webhook", json=webhook_payload)
+            assert res.status_code == 200, f"Webhook quick reply failed: {res.text}"
             
             # Verify response states
             res = await client.get("/api/v1/records?parent_response=Interested", headers=headers)
             assert any(r["id"] == record_id for r in res.json()["records"]), "Response filter failed"
             logger.info("Funnel Level 4 (Interested Response) verified.")
             
-            # 6b. Test Sandbox Webhook Simulation (Simulate Status Callback: Failed)
-            logger.info("Simulating Webhook Status Callback: 'failed' via sandbox simulation API...")
+            # 6b. Test Webhook Status Callback (Simulate Status Callback: Failed)
+            logger.info("Dispatching campaign to other record first to generate message_id...")
             other_record = next(r for r in records_data["records"] if r["id"] != record_id)
             other_id = other_record["id"]
-            sim_payload = {"record_id": other_id, "target_state": "failed"}
-            res = await client.post("/api/v1/simulation/webhook-trigger", json=sim_payload, headers=headers)
-            assert res.status_code == 200, f"Simulation webhook failed: {res.text}"
+            res = await client.post(f"/api/v1/campaign/send-single/{other_id}", headers=headers)
+            assert res.status_code == 200
+            
+            # Fetch other record to capture message_id
+            res = await client.get("/api/v1/records", headers=headers)
+            records_data = res.json()
+            updated_other = next(r for r in records_data["records"] if r["id"] == other_id)
+            other_message_id = updated_other["message_id"]
+            assert other_message_id is not None
+            
+            logger.info("Simulating Webhook Status Callback: 'failed' via public webhook...")
+            webhook_payload = {
+                "event": "status_update",
+                "message_id": other_message_id,
+                "status": "failed"
+            }
+            res = await client.post("/api/v1/whatsapp/webhook", json=webhook_payload)
+            assert res.status_code == 200, f"Webhook failed: {res.text}"
             
             # Verify record transitioned to Failed
             res = await client.get("/api/v1/records", headers=headers)
@@ -291,8 +318,20 @@ async def run_tests():
             if not interested_rec:
                 logger.info("Simulating Interested parent for safeguard verification...")
                 sim_target_id = eligible_records[0]["id"]
-                sim_payload = {"record_id": sim_target_id, "target_state": "Interested"}
-                await client.post("/api/v1/simulation/webhook-trigger", json=sim_payload, headers=headers)
+                target_rec = next(r for r in all_records if r["id"] == sim_target_id)
+                target_msg_id = target_rec.get("message_id")
+                if not target_msg_id:
+                    await client.post(f"/api/v1/campaign/send-single/{sim_target_id}", headers=headers)
+                    res = await client.get("/api/v1/records", headers=headers)
+                    all_records = res.json()["records"]
+                    target_rec = next(r for r in all_records if r["id"] == sim_target_id)
+                    target_msg_id = target_rec["message_id"]
+                webhook_payload = {
+                    "event": "quick_reply",
+                    "message_id": target_msg_id,
+                    "button_text": "Interested"
+                }
+                await client.post("/api/v1/whatsapp/webhook", json=webhook_payload)
                 interested_rec = {"id": sim_target_id}
                 
             non_interested_rec = next(r for r in all_records if r["id"] != interested_rec["id"] and r["parent_response"] != "Interested")

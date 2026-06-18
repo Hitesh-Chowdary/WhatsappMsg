@@ -151,13 +151,7 @@ function App() {
   const [uploadStatusText, setUploadStatusText] = useState('');
   const [parsedColumns, setParsedColumns] = useState([]);
 
-  // Dev Sandbox Simulator State
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedRecord, setSelectedRecord] = useState(null);
-  const [consoleLogs, setConsoleLogs] = useState([
-    { time: new Date().toLocaleTimeString(), text: "Sandbox initialized. Ready for simulation.", level: "info" }
-  ]);
-  const [simButtonsDisabled, setSimButtonsDisabled] = useState(false);
+
 
   // Chat State
   const [activeView, setActiveView] = useState('outreach'); // 'outreach' or 'chat'
@@ -417,22 +411,7 @@ function App() {
   }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, templateFilter, search, currentPage]);
 
   // Scroll sandbox logs to bottom
-  useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [consoleLogs]);
 
-  // Update sandbox simulator details if active record changes status
-  useEffect(() => {
-    if (selectedRecord) {
-      const match = records.find(r => r.id === selectedRecord.id);
-      if (match) {
-        setSelectedRecord(match);
-        setSimButtonsDisabled(false);
-      }
-    }
-  }, [records]);
 
   // Trigger Excel download of filtered results
   const handleExportExcel = async () => {
@@ -521,16 +500,7 @@ function App() {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  // ----------------------------------------------------
-  // CONSOLE LOGGER HELPERS
-  // ----------------------------------------------------
-  const addLog = (text, level = 'info') => {
-    setConsoleLogs(prev => [...prev, {
-      time: new Date().toLocaleTimeString(),
-      text,
-      level
-    }]);
-  };
+
 
   // ----------------------------------------------------
   // API CALLS
@@ -984,32 +954,7 @@ function App() {
     });
   };
 
-  // Trigger simulated webhooks
-  const triggerWebhookSimulation = async (state) => {
-    if (!selectedRecord) return;
-    addLog(`Firing webhook payload simulation -> target state: '${state}'...`, 'info');
 
-    try {
-      const res = await authFetch(`${API_BASE}/api/v1/simulation/webhook-trigger`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          record_id: selectedRecord.id,
-          target_state: state
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Simulation failed.");
-
-      addLog(`Webhook Success: Status transitioned to '${state}' for '${selectedRecord.student_name}'.`, 'success');
-      triggerToast(`Simulated response: ${state}`, "success");
-      refreshDashboard();
-    } catch (err) {
-      addLog(`Webhook Failed: ${err.message}`, 'error');
-      triggerToast(err.message, "error");
-    }
-  };
 
   // Reset uploader display
   const handleResetUploader = () => {
@@ -1140,12 +1085,7 @@ function App() {
     }
   };
 
-  const selectSimTarget = (rec) => {
-    setSelectedRecord(rec);
-    setSimButtonsDisabled(false);
-    setDrawerOpen(true);
-    addLog(`Selected target student: ${rec.student_name} (Phone: ${rec.phone_number})`, 'info');
-  };
+
 
   // Helper helper
   const changePage = (dir) => {
@@ -1271,7 +1211,7 @@ function App() {
   }
 
   return (
-    <div className={`app-wrapper ${drawerOpen ? 'drawer-open' : ''}`}>
+    <div className="app-wrapper">
       {/* 2. Main Content View Area */}
       <main className="app-content">
         
@@ -1284,14 +1224,7 @@ function App() {
           </div>
           
           <div style={{ display: 'flex', gap: '12px' }}>
-            <button onClick={() => setDrawerOpen(true)} className="btn btn-secondary btn-sandbox">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
-              </svg>
-              Dev Sandbox Simulator
-            </button>
+
             <button onClick={handleLogout} className="btn btn-secondary" style={{ borderColor: 'var(--color-coral)', color: 'var(--color-coral)' }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
@@ -2115,9 +2048,7 @@ function App() {
                             >
                               {rec.campaign_status === 'Pending' ? 'Send' : 'Resend'}
                             </button>
-                            <button onClick={() => selectSimTarget(rec)} className="btn btn-secondary btn-sm">
-                              Simulate
-                            </button>
+
                           </div>
                         </td>
                       </tr>
@@ -2336,265 +2267,6 @@ function App() {
         )}
       </main>
 
-      {/* 3. Slide-Out Developer Webhook Sandbox Drawer */}
-      <div 
-        className={`sandbox-backdrop ${drawerOpen ? '' : 'hidden'}`} 
-        onClick={() => setDrawerOpen(false)}
-      />
-      <aside className={`sandbox-drawer ${drawerOpen ? 'open' : ''}`}>
-        <div className="drawer-header">
-          <h3>Dev Sandbox Simulator</h3>
-          <button onClick={() => setDrawerOpen(false)} className="btn-close-drawer">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        </div>
-        <div className="drawer-content">
-          <p className="drawer-desc">
-            Simulate async webhook responses from third-party WhatsApp gateways (sent ➔ delivered ➔ read) or parent action clicks (Interested / Not Interested).
-          </p>
-
-          <div className="simulator-card selection-card">
-            <h5>1. Target Record Selection</h5>
-            {selectedRecord ? (
-              <div className="sim-details-active">
-                <span className="sim-meta-label">Student:</span>
-                <span className="sim-meta-val">{selectedRecord.student_name} (ID: {selectedRecord.id})</span>
-                <span className="sim-meta-label">Parent:</span>
-                <span className="sim-meta-val">{selectedRecord.parent_name}</span>
-                <span className="sim-meta-label">Phone:</span>
-                <span className="sim-meta-val">+{selectedRecord.phone_number}</span>
-                <span className="sim-meta-label">Message ID:</span>
-                <span className="sim-meta-val" style={{ wordBreak: 'break-all', fontFamily: 'monospace' }}>
-                  {selectedRecord.message_id ? selectedRecord.message_id : <span className="text-coral">Not Sent (Will auto-generate on click)</span>}
-                </span>
-              </div>
-            ) : (
-              <div className="sim-details-empty">
-                Select a row record by clicking its simulated trigger button in the main table.
-              </div>
-            )}
-          </div>
-
-          {selectedRecord && (
-            <div className="simulator-card preview-card">
-              <h5>Simulated Parent Phone View</h5>
-              <div className="sandbox-phone-mockup" style={{ 
-                background: '#e5ddd5', 
-                padding: '16px 12px',
-                borderRadius: '8px',
-                border: '1px solid #cbd5e1',
-                maxHeight: '340px',
-                overflowY: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
-                backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")',
-                backgroundSize: 'cover'
-              }}>
-                <div className="whatsapp-bubble" style={{ 
-                  background: '#ffffff',
-                  padding: '8px 10px',
-                  borderRadius: '8px',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
-                  position: 'relative',
-                  alignSelf: 'flex-start',
-                  maxWidth: '90%',
-                  fontSize: '0.813rem'
-                }}>
-                  {/* Render attached template media if configured */}
-                  {mediaType === 'image' && mediaUrl && (
-                    <div className="bubble-media-preview" style={{ marginBottom: '6px' }}>
-                      <img 
-                        src={mediaUrl.startsWith('/') ? `${API_BASE}${mediaUrl}` : mediaUrl} 
-                        alt="Outreach Media" 
-                        style={{ width: '100%', borderRadius: '6px', maxHeight: '160px', objectFit: 'cover' }} 
-                        onError={(e) => { e.target.style.display = 'none'; }}
-                      />
-                    </div>
-                  )}
-                  {mediaType === 'document' && mediaUrl && (
-                    <div className="bubble-media-preview" style={{ 
-                      marginBottom: '8px', 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '8px', 
-                      padding: '8px 10px', 
-                      background: '#f0f2f5', 
-                      borderRadius: '6px',
-                      borderLeft: '4px solid #00a884'
-                    }}>
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" style={{ flexShrink: 0 }}>
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                      </svg>
-                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem', color: '#475569' }}>
-                        <strong>{mediaFilename || 'document.pdf'}</strong>
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Compiled body text */}
-                  <div className="bubble-text" style={{ whiteSpace: 'pre-wrap', color: '#1e293b', fontSize: '0.813rem', lineHeight: '1.4' }}>
-                    {templateText
-                      ? templateText
-                          .replace(/\[Parent Name\]/g, selectedRecord.parent_name)
-                          .replace(/\[Student Name\]/g, selectedRecord.student_name)
-                          .replace(/\[Selected Branch\]/g, selectedRecord.selected_branch)
-                          .replace(/\[Phone Number\]/g, selectedRecord.phone_number)
-                      : "No active template text."}
-                  </div>
-
-                  {/* Bubble timestamps */}
-                  <div style={{ textAlign: 'right', fontSize: '0.625rem', color: '#94a3b8', marginTop: '4px' }}>
-                    {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </div>
-                </div>
-
-                {/* Interactive Action Buttons */}
-                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                  <button 
-                    onClick={() => triggerWebhookSimulation('Interested')}
-                    style={{
-                      flex: 1,
-                      background: '#ffffff',
-                      color: '#00a884',
-                      border: '1px solid #cbd5e1',
-                      padding: '6px',
-                      borderRadius: '20px',
-                      fontSize: '0.75rem',
-                      fontWeight: '600',
-                      cursor: 'pointer',
-                      boxShadow: '0 1px 1px rgba(0,0,0,0.05)',
-                      textAlign: 'center'
-                    }}
-                  >
-                    Reply: Interested
-                  </button>
-                  <button 
-                    onClick={() => triggerWebhookSimulation('Not Interested')}
-                    style={{
-                      flex: 1,
-                      background: '#ffffff',
-                      color: '#ef4444',
-                      border: '1px solid #cbd5e1',
-                      padding: '6px',
-                      borderRadius: '20px',
-                      fontSize: '0.75rem',
-                      fontWeight: '600',
-                      cursor: 'pointer',
-                      boxShadow: '0 1px 1px rgba(0,0,0,0.05)',
-                      textAlign: 'center'
-                    }}
-                  >
-                    Reply: Not Interested
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="simulator-card actions-card">
-            <h5>2. Fire Webhook Callback</h5>
-            <div className="simulation-actions-grid">
-              <button 
-                onClick={() => triggerWebhookSimulation('delivered')} 
-                className="btn btn-secondary sim-action-btn"
-                disabled={simButtonsDisabled}
-              >
-                Simulate Delivery (Delivered)
-              </button>
-              <button 
-                onClick={() => triggerWebhookSimulation('read')} 
-                className="btn btn-secondary sim-action-btn"
-                disabled={simButtonsDisabled}
-              >
-                Simulate Reading (Seen)
-              </button>
-              <button 
-                onClick={() => triggerWebhookSimulation('failed')} 
-                className="btn btn-secondary sim-action-btn text-coral"
-                disabled={simButtonsDisabled}
-                style={{ borderColor: 'var(--color-coral)' }}
-              >
-                Simulate Failure (Failed)
-              </button>
-              <button 
-                onClick={() => triggerWebhookSimulation('Interested')} 
-                className="btn btn-success sim-action-btn"
-                disabled={simButtonsDisabled}
-              >
-                Simulate Click: Interested
-              </button>
-              <button 
-                onClick={() => triggerWebhookSimulation('Not Interested')} 
-                className="btn btn-danger sim-action-btn"
-                disabled={simButtonsDisabled}
-              >
-                Simulate Click: Not Interested
-              </button>
-            </div>
-          </div>
-
-          <div className="simulator-card actions-card">
-            <h5>3. Simulate Custom Text Reply</h5>
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              <input 
-                type="text" 
-                placeholder="Type simulated student reply..." 
-                className="rule-input-field"
-                style={{ marginBottom: 0 }}
-                id="simulatedReplyInput"
-              />
-              <button 
-                onClick={async () => {
-                  const input = document.getElementById("simulatedReplyInput");
-                  if (!input || !input.value.trim() || !selectedRecord) return;
-                  
-                  const randMsgId = 'wa_sim_in_' + Math.random().toString(36).substring(2, 10);
-                  try {
-                    const res = await fetch(`${API_BASE}/api/v1/whatsapp/webhook`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        event: 'incoming_text',
-                        message_id: randMsgId,
-                        from_phone: selectedRecord.phone_number,
-                        text_body: input.value
-                      })
-                    });
-                    if (res.ok) {
-                      triggerToast("Simulated text reply processed.", "success");
-                      input.value = '';
-                      fetchRecentChats();
-                      if (activeChatRecordId) fetchChatHistory(activeChatRecordId);
-                    }
-                  } catch (err) {
-                    console.error(err);
-                  }
-                }}
-                className="btn btn-primary btn-sm"
-              >
-                Send Text
-              </button>
-            </div>
-          </div>
-
-          <div className="simulator-logs">
-            <h5>Simulation Event Logs</h5>
-            <div className="console-box">
-              {consoleLogs.map((log, idx) => (
-                <div key={idx} className={`log-line log-${log.level}`}>
-                  [{log.time}] {log.text}
-                </div>
-              ))}
-              <div ref={logsEndRef} />
-            </div>
-          </div>
-        </div>
-      </aside>
 
       {/* 4. Global notifications toaster container */}
       <div className="toast-container">
