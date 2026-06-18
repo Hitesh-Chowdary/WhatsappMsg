@@ -1521,7 +1521,85 @@ async def process_webhook_event(
             
     await db.commit()
     logger.info(f"Updated CampaignLog ID {log.id} status via webhook callback processing.")
+    
+    # Trigger auto-response for quick replies (Interested, Not Interested)
+    if event == "quick_reply" and button_text in ["Interested", "Not Interested"]:
+        try:
+            await handle_quick_reply_auto_response(log.record_id, button_text, db)
+        except Exception as e:
+            logger.error(f"Error triggering quick reply auto response: {e}")
+            
     return {"status": "success", "record_id": log.record_id}
+
+# Helper to process incoming quick reply button clicks (e.g. Interested, Not Interested) and trigger auto-response
+async def handle_quick_reply_auto_response(
+    record_id: int,
+    button_text: str,
+    db: AsyncSession
+):
+    import uuid
+    # Fetch candidate record
+    stmt = select(Record).where(Record.id == record_id)
+    res = await db.execute(stmt)
+    record = res.scalar_one_or_none()
+    if not record:
+        logger.warning(f"Quick reply auto response ignored: record ID {record_id} not found.")
+        return
+        
+    # Search for matching Auto-Reply rule
+    rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
+    rules_res = await db.execute(rules_stmt)
+    all_rules = rules_res.scalars().all()
+    
+    matched_rule = None
+    for rule in all_rules:
+        if rule.keyword.lower().strip() == button_text.lower().strip():
+            matched_rule = rule
+            break
+            
+    # Default fallbacks if no custom rule configured
+    reply_text = None
+    if matched_rule:
+        reply_text = matched_rule.reply_text
+    else:
+        if button_text.lower().strip() == "interested":
+            reply_text = (
+                "Thank you, [Parent Name]! We have recorded your interest for [Selected Branch]. "
+                "Our admissions counselor will call you shortly to discuss seat allocation, "
+                "scholarship options, and hostel facilities. 📞"
+            )
+        elif button_text.lower().strip() == "not interested":
+            reply_text = (
+                "We understand, [Parent Name]. We have updated your preference in our portal and "
+                "will not send further automated updates. If you change your mind, feel free to contact "
+                "us anytime. Thank you!"
+            )
+            
+    if reply_text:
+        # Compile dynamic variables if present in the reply text
+        reply_text = reply_text.replace("[Parent Name]", record.parent_name or "Parent")
+        reply_text = reply_text.replace("[Student Name]", record.student_name or "Student")
+        reply_text = reply_text.replace("[Selected Branch]", record.selected_branch or "Selected Branch")
+        reply_text = reply_text.replace("[Phone Number]", record.phone_number or "")
+        
+        # Send message via WhatsApp
+        whatsapp_client = get_whatsapp_client()
+        response = await whatsapp_client.send_free_form_message(
+            to_phone=record.phone_number,
+            message_text=reply_text
+        )
+        
+        # Save auto-reply in chat history as system sender
+        auto_msg_id = response.get("message_id") if response.get("status") == "success" else f"auto_fail_{uuid.uuid4().hex[:12]}"
+        auto_chat_msg = ChatMessage(
+            record_id=record.id,
+            sender="system",
+            message_text=reply_text,
+            message_id=auto_msg_id
+        )
+        db.add(auto_chat_msg)
+        await db.commit()
+        logger.info(f"Auto-response sent and logged for record ID {record.id} quick reply '{button_text}'.")
 
 # Helper to process incoming text replies and trigger auto-responder
 async def handle_incoming_text_reply(
