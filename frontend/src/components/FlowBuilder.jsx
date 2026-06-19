@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   ReactFlow,
   Controls,
@@ -121,6 +121,114 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  
+  // History states
+  const [past, setPast] = useState([]);
+  const [future, setFuture] = useState([]);
+  const dragStateRef = useRef(null);
+
+  // Helper to push state
+  const pushToHistory = useCallback((currentNodes, currentEdges) => {
+    const clonedNodes = JSON.parse(JSON.stringify(currentNodes));
+    const clonedEdges = JSON.parse(JSON.stringify(currentEdges));
+    setPast((prev) => [...prev, { nodes: clonedNodes, edges: clonedEdges }]);
+    setFuture([]);
+  }, []);
+
+  const undo = useCallback(() => {
+    if (past.length === 0) return;
+    const previous = past[past.length - 1];
+    const newPast = past.slice(0, past.length - 1);
+    const current = { 
+      nodes: JSON.parse(JSON.stringify(nodes)), 
+      edges: JSON.parse(JSON.stringify(edges)) 
+    };
+    setPast(newPast);
+    setFuture((prev) => [...prev, current]);
+    setNodes(previous.nodes);
+    setEdges(previous.edges);
+    setSelectedNode(null);
+  }, [past, nodes, edges, setNodes, setEdges]);
+
+  const redo = useCallback(() => {
+    if (future.length === 0) return;
+    const next = future[future.length - 1];
+    const newFuture = future.slice(0, future.length - 1);
+    const current = { 
+      nodes: JSON.parse(JSON.stringify(nodes)), 
+      edges: JSON.parse(JSON.stringify(edges)) 
+    };
+    setPast((prev) => [...prev, current]);
+    setFuture(newFuture);
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setSelectedNode(null);
+  }, [future, nodes, edges, setNodes, setEdges]);
+
+  const onNodeDragStart = useCallback(() => {
+    dragStateRef.current = {
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      edges: JSON.parse(JSON.stringify(edges))
+    };
+  }, [nodes, edges]);
+
+  const onNodeDragStop = useCallback(() => {
+    if (dragStateRef.current) {
+      setPast((prev) => [...prev, dragStateRef.current]);
+      setFuture([]);
+      dragStateRef.current = null;
+    }
+  }, []);
+
+  const cloneSelectedNode = useCallback(() => {
+    if (!selectedNode) return;
+    pushToHistory(nodes, edges);
+    const id = `${selectedNode.type}-clone-${Date.now()}`;
+    const newNode = {
+      ...JSON.parse(JSON.stringify(selectedNode)),
+      id,
+      position: { 
+        x: selectedNode.position.x + 40, 
+        y: selectedNode.position.y + 40 
+      }
+    };
+    setNodes((nds) => nds.concat(newNode));
+    setSelectedNode(newNode);
+  }, [selectedNode, nodes, edges, pushToHistory, setNodes]);
+
+  const autoLayout = useCallback(() => {
+    pushToHistory(nodes, edges);
+    const triggers = nodes.filter(n => n.type === 'trigger');
+    const messages = nodes.filter(n => n.type === 'message');
+    
+    let triggerY = 50;
+    const triggerX = 80;
+    const updatedTriggers = triggers.map(n => {
+      const nodeWithPos = { ...n, position: { x: triggerX, y: triggerY } };
+      triggerY += 140;
+      return nodeWithPos;
+    });
+
+    let messageY = 50;
+    const messageX = 420;
+    const updatedMessages = messages.map(n => {
+      const nodeWithPos = { ...n, position: { x: messageX, y: messageY } };
+      messageY += 180;
+      return nodeWithPos;
+    });
+
+    setNodes([...updatedTriggers, ...updatedMessages]);
+    setSelectedNode(null);
+  }, [nodes, edges, pushToHistory, setNodes]);
+
+  const clearCanvas = useCallback(() => {
+    if (window.confirm("Are you sure you want to clear the entire canvas? This cannot be undone unless you click Undo.")) {
+      pushToHistory(nodes, edges);
+      setNodes([]);
+      setEdges([]);
+      setSelectedNode(null);
+    }
+  }, [nodes, edges, pushToHistory, setNodes, setEdges]);
 
   // Define custom node types
   const nodeTypes = useMemo(() => ({
@@ -187,8 +295,9 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
 
   // Connect edge handler
   const onConnect = useCallback((connection) => {
+    pushToHistory(nodes, edges);
     setEdges((eds) => addEdge(connection, eds));
-  }, [setEdges]);
+  }, [nodes, edges, pushToHistory, setEdges]);
 
   // Node click handler
   const onNodeClick = useCallback((event, node) => {
@@ -205,6 +314,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
   // Node editing state updates
   const updateSelectedNode = () => {
     if (!selectedNode) return;
+    pushToHistory(nodes, edges);
     
     setNodes((nds) =>
       nds.map((node) => {
@@ -232,6 +342,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
 
   // Add trigger node
   const addTriggerNode = () => {
+    pushToHistory(nodes, edges);
     const id = `trigger-${Date.now()}`;
     const newNode = {
       id,
@@ -244,6 +355,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
 
   // Add message node
   const addMessageNode = () => {
+    pushToHistory(nodes, edges);
     const id = `message-${Date.now()}`;
     const newNode = {
       id,
@@ -257,6 +369,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
   // Delete selected node
   const deleteSelectedNode = () => {
     if (!selectedNode) return;
+    pushToHistory(nodes, edges);
     setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
     setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
     setSelectedNode(null);
@@ -322,7 +435,13 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
             <h3 style={{ fontWeight: 700, fontSize: '1.15rem' }}>Visual Auto-Bot Flow Builder</h3>
             <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Drag and connect trigger keywords to reply messages.</p>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', borderRight: '1px solid var(--border-color)', paddingRight: '0.5rem', marginRight: '0.1rem', gap: '0.25rem' }}>
+              <button className="btn btn-secondary btn-sm" onClick={undo} disabled={past.length === 0} title="Undo last change" style={{ padding: '0.4rem 0.6rem' }}>↩️ Undo</button>
+              <button className="btn btn-secondary btn-sm" onClick={redo} disabled={future.length === 0} title="Redo change" style={{ padding: '0.4rem 0.6rem' }}>Redo ↪️</button>
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={autoLayout} title="Clean up and align nodes vertically">📐 Auto-Layout</button>
+            <button className="btn btn-secondary btn-sm" onClick={clearCanvas} style={{ borderColor: 'var(--color-coral)', color: 'var(--color-coral)' }}>🗑️ Clear All</button>
             <button className="btn btn-secondary btn-sm" onClick={addTriggerNode}>+ Trigger Node</button>
             <button className="btn btn-secondary btn-sm" onClick={addMessageNode}>+ Message Node</button>
             <button className="btn btn-primary btn-sm" onClick={saveFlowConfig} disabled={saving}>
@@ -344,6 +463,8 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onNodeClick={onNodeClick}
+              onNodeDragStart={onNodeDragStart}
+              onNodeDragStop={onNodeDragStop}
               nodeTypes={nodeTypes}
               fitView
             >
@@ -437,9 +558,12 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+              <div style={{ display: 'flex', gap: '0.3rem', marginTop: '1rem' }}>
                 <button className="btn btn-primary btn-sm" style={{ flexGrow: 1 }} onClick={updateSelectedNode}>
                   Update Node
+                </button>
+                <button className="btn btn-secondary btn-sm" style={{ padding: '0.5rem 0.75rem' }} onClick={cloneSelectedNode} title="Duplicate Node">
+                  📋 Clone
                 </button>
                 <button 
                   className="btn btn-danger btn-sm" 
