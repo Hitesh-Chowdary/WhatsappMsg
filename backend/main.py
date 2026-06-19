@@ -1750,6 +1750,9 @@ async def handle_incoming_text_reply(
             reply_text = reply_text.replace("[Phone Number]", record.phone_number or "")
             reply_text = reply_text.replace("[Application ID]", str(record.id) or "")
             
+            # Replace literal "\n" strings with actual newline characters
+            reply_text = reply_text.replace("\\n", "\n")
+            
             # Replace custom variables parsed from Excel spreadsheet columns
             import re
             placeholders = re.findall(r"\[(.*?)\]", reply_text)
