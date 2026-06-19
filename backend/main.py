@@ -1695,6 +1695,17 @@ async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict
         
     return None
 
+def normalize_parent_response(source_keyword: str) -> str:
+    if not source_keyword:
+        return "No Response"
+    normalized = source_keyword.lower().strip()
+    if normalized in ["interested", "yes", "confirm", "agree", "block seat"]:
+        return "Interested"
+    elif normalized in ["not interested", "no", "cancel", "decline", "not_interested"]:
+        return "Not Interested"
+    else:
+        return f"Replied ({source_keyword})"
+
 async def handle_incoming_text_reply(
     from_phone: str,
     message_text: str,
@@ -1794,7 +1805,7 @@ async def handle_incoming_text_reply(
         db.add(auto_chat_msg)
         
         # Update record response state
-        record.parent_response = f"Replied ({source_keyword})"
+        record.parent_response = normalize_parent_response(source_keyword)
         record.responded_at = datetime.utcnow()
         
         # Mirror updates to latest CampaignLog if it exists
@@ -1802,7 +1813,7 @@ async def handle_incoming_text_reply(
         log_res = await db.execute(log_stmt)
         latest_log = log_res.scalars().first()
         if latest_log:
-            latest_log.parent_response = f"Replied ({source_keyword})"
+            latest_log.parent_response = normalize_parent_response(source_keyword)
             latest_log.responded_at = record.responded_at
             latest_log.delivery_status = "Read"
 
@@ -1969,9 +1980,9 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                                     message_id=response.get("message_id") if response.get("status") == "success" else f"auto_fail_{uuid.uuid4().hex[:12]}"
                                 )
                                 db.add(auto_chat_msg)
-                                rec.parent_response = f"Replied ({source_keyword})"
+                                rec.parent_response = normalize_parent_response(source_keyword)
                                 rec.responded_at = datetime.utcnow()
-                                log.parent_response = f"Replied ({source_keyword})"
+                                log.parent_response = normalize_parent_response(source_keyword)
                                 log.responded_at = rec.responded_at
                                 log.delivery_status = "Read"
                 
