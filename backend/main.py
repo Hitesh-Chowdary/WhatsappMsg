@@ -1742,6 +1742,31 @@ async def handle_incoming_text_reply(
         buttons = response_data.get("buttons", [])
         source_keyword = response_data["source_keyword"]
         
+        # Compile dynamic placeholders from database record fields
+        if record:
+            reply_text = reply_text.replace("[Parent Name]", record.parent_name or "Parent")
+            reply_text = reply_text.replace("[Student Name]", record.student_name or "Student")
+            reply_text = reply_text.replace("[Selected Branch]", record.selected_branch or "Selected Branch")
+            reply_text = reply_text.replace("[Phone Number]", record.phone_number or "")
+            reply_text = reply_text.replace("[Application ID]", str(record.id) or "")
+            
+            # Replace custom variables parsed from Excel spreadsheet columns
+            import re
+            placeholders = re.findall(r"\[(.*?)\]", reply_text)
+            for p in placeholders:
+                p_lower = p.strip().lower()
+                p_key_normalized = p_lower.replace("_", "").replace(" ", "")
+                if record.variables:
+                    # Direct key match
+                    if p_lower in record.variables:
+                        reply_text = reply_text.replace(f"[{p}]", record.variables[p_lower])
+                    # Synonyms or spacer matches
+                    else:
+                        for key, val in record.variables.items():
+                            if key.replace("_", "").replace(" ", "") == p_key_normalized:
+                                reply_text = reply_text.replace(f"[{p}]", val)
+                                break
+        
         whatsapp_client = get_whatsapp_client()
         if buttons:
             response = await whatsapp_client.send_interactive_message(
