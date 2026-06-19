@@ -293,6 +293,41 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-Save Effect (Debounced to 1.5s after last modification)
+  useEffect(() => {
+    if (loading || nodes.length === 0) return;
+
+    const autoSaveTimeout = setTimeout(async () => {
+      setSaving(true);
+      setStatusMessage('Auto-saving flow changes... 🔄');
+      try {
+        const payload = {
+          name: 'Default Flow',
+          flow_data: { nodes, edges },
+          is_active: true
+        };
+        const res = await authFetch(`${API_BASE}/api/v1/bot/flows`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res && res.ok) {
+          setStatusMessage('Workflow auto-saved! ✅');
+        } else {
+          setStatusMessage('Auto-save failed.');
+        }
+      } catch (e) {
+        console.error("Auto-save error:", e);
+        setStatusMessage('Auto-save error.');
+      } finally {
+        setSaving(false);
+        setTimeout(() => setStatusMessage(''), 2000);
+      }
+    }, 1500);
+
+    return () => clearTimeout(autoSaveTimeout);
+  }, [nodes, edges, loading, authFetch, API_BASE]);
+
   // Connect edge handler
   const onConnect = useCallback((connection) => {
     pushToHistory(nodes, edges);
