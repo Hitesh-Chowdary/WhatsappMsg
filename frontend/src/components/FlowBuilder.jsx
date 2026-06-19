@@ -699,6 +699,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
           comparisonRef.current = getCleanComparisonString(fNodes, fEdges);
           setHasUnsavedChanges(false);
           setLoadCounter(prev => prev + 1);
+          setScriptText(generateScriptFromFlow(fNodes, fEdges));
         } else {
           // Initialize default setup if database is completely empty
           const defaultFlowObj = {
@@ -713,6 +714,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
           comparisonRef.current = getCleanComparisonString(initialNodes, initialEdges);
           setHasUnsavedChanges(false);
           setLoadCounter(prev => prev + 1);
+          setScriptText(generateScriptFromFlow(initialNodes, initialEdges));
         }
       }
     } catch (e) {
@@ -812,6 +814,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
   // Node click handler
   const onNodeClick = useCallback((event, node) => {
     setSelectedNode(node);
+    setActiveSidebarTab('config'); // Automatically open Node Config tab
     if (node.type === 'trigger') {
       setKeyword(node.data.keyword || '');
     } else if (node.type === 'message') {
@@ -989,6 +992,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
     comparisonRef.current = getCleanComparisonString(newFlowObj.flow_data.nodes, []);
     setHasUnsavedChanges(true); // Since it's not saved to database yet
     setLoadCounter(prev => prev + 1);
+    setScriptText(generateScriptFromFlow(newFlowObj.flow_data.nodes, []));
   };
 
   const handleDeleteFlow = async () => {
@@ -1363,6 +1367,7 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
                     setFuture([]);
                     setSelectedNode(null);
                     setLoadCounter(prev => prev + 1);
+                    setScriptText(generateScriptFromFlow(flowObj.flow_data?.nodes || [], flowObj.flow_data?.edges || []));
                   }
                 }}
                 className="custom-select"
