@@ -182,7 +182,8 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
 
   useEffect(() => {
     loadFlow();
-  }, [loadFlow]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Connect edge handler
   const onConnect = useCallback((connection) => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import FlowBuilder from './components/FlowBuilder';
 
 const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "http://localhost:8000" : "";
@@ -24,7 +24,7 @@ function App() {
   });
 
   // Authenticated Fetch Wrapper
-  const authFetch = async (url, options = {}) => {
+  const authFetch = useCallback(async (url, options = {}) => {
     const headers = {
       ...options.headers,
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
@@ -42,7 +42,7 @@ function App() {
       console.error("API request failed:", err);
       throw err;
     }
-  };
+  }, [token]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
