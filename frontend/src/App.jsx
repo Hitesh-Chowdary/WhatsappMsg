@@ -1387,8 +1387,7 @@ function App() {
           </button>
         </div>
 
-        {activeView === 'outreach' && (
-          <>
+        <div style={{ display: activeView === 'outreach' ? 'flex' : 'none', flexDirection: 'column', gap: '2rem' }}>
             {/* Analytics statistical counters grid */}
             <section className="analytics-grid">
           <div className="stat-card">
@@ -2283,11 +2282,9 @@ function App() {
             </div>
           </div>
         </section>
-          </>
-        )}
+        </div>
 
-        {activeView === 'chat' && (
-          <div className="chat-container">
+        <div className="chat-container" style={{ display: activeView === 'chat' ? 'grid' : 'none' }}>
             {/* 1. Recent Chats List Pane */}
             <div className="glass-panel chat-list-panel">
               <div className="chat-search-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -2669,11 +2666,10 @@ function App() {
               </div>
             </div>
           </div>
-        )}
 
-        {activeView === 'bot-builder' && (
+        <div style={{ display: activeView === 'bot-builder' ? 'block' : 'none', height: '100%', width: '100%' }}>
           <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} />
-        )}
+        </div>
       </main>
 
 
