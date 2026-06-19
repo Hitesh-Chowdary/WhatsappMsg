@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import FlowBuilder from './components/FlowBuilder';
 
 const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "http://localhost:8000" : "";
 const RECORDS_PER_PAGE = 15;
@@ -96,6 +97,8 @@ function App() {
   const [gridLoading, setGridLoading] = useState(true);
   const [gridError, setGridError] = useState('');
   const [branchFilter, setBranchFilter] = useState('all');
+  const [pipelineTagFilter, setPipelineTagFilter] = useState('all');
+  const [pendingNotesFilter, setPendingNotesFilter] = useState(false);
   const [branches, setBranches] = useState([]);
   const [selectedRecordIds, setSelectedRecordIds] = useState([]);
 
@@ -167,6 +170,10 @@ function App() {
   const [newRuleReply, setNewRuleReply] = useState('');
   const [sendingChat, setSendingChat] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
+  const [activeChatSubTab, setActiveChatSubTab] = useState('chat'); // 'chat' or 'notes'
+  const [chatNotes, setChatNotes] = useState([]);
+  const [newNoteText, setNewNoteText] = useState('');
+  const [addingNote, setAddingNote] = useState(false);
 
   // --- Chat & Auto-Reply API Handlers ---
   
@@ -181,6 +188,37 @@ function App() {
       console.error("Error fetching recent chats:", err);
     }
   };
+  const handleUpdateTag = async (recordId, newTag) => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/records/${recordId}/tag`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pipeline_tag: newTag })
+      });
+      if (res.ok) {
+        triggerToast(`Pipeline tag updated to ${newTag}`, "success");
+        // Update tag in chatsList state
+        setChatsList(prev => prev.map(c => {
+          if (c.record.id === recordId) {
+            return { ...c, record: { ...c.record, pipeline_tag: newTag } };
+          }
+          return c;
+        }));
+        // Update tag in records grid list state
+        setRecords(prev => prev.map(r => {
+          if (r.id === recordId) {
+            return { ...r, pipeline_tag: newTag };
+          }
+          return r;
+        }));
+      } else {
+        triggerToast("Failed to update pipeline tag.", "error");
+      }
+    } catch (err) {
+      console.error("Error updating tag:", err);
+      triggerToast("Failed to update pipeline tag.", "error");
+    }
+  };
 
   const fetchChatHistory = async (recordId) => {
     try {
@@ -191,6 +229,66 @@ function App() {
       }
     } catch (err) {
       console.error("Error fetching chat history:", err);
+    }
+  };
+
+  const fetchChatNotes = async (recordId) => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/records/${recordId}/notes`);
+      if (res.ok) {
+        const data = await res.json();
+        setChatNotes(data);
+      }
+    } catch (err) {
+      console.error("Error fetching notes:", err);
+    }
+  };
+
+  const addChatNote = async () => {
+    if (!newNoteText.trim() || !activeChatRecordId) return;
+    setAddingNote(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/records/${activeChatRecordId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note_text: newNoteText })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChatNotes(prev => [data.note, ...prev]);
+        setNewNoteText('');
+        // Increment unresolved counts dynamically
+        setRecords(prev => prev.map(rec => rec.id === activeChatRecordId ? { ...rec, unresolved_notes_count: (rec.unresolved_notes_count || 0) + 1 } : rec));
+        setChatsList(prev => prev.map(c => c.record.id === activeChatRecordId ? { ...c, record: { ...c.record, unresolved_notes_count: (c.record.unresolved_notes_count || 0) + 1 } } : c));
+        triggerToast("Note added successfully.", "success");
+      } else {
+        triggerToast("Failed to add internal note.", "error");
+      }
+    } catch (err) {
+      console.error("Error adding note:", err);
+      triggerToast("Failed to add internal note.", "error");
+    } finally {
+      setAddingNote(false);
+    }
+  };
+
+  const resolveChatNote = async (noteId) => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/notes/${noteId}/resolve`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        setChatNotes(prev => prev.map(note => note.id === noteId ? { ...note, resolved: true } : note));
+        // Decrement unresolved counts dynamically
+        setRecords(prev => prev.map(rec => rec.id === activeChatRecordId ? { ...rec, unresolved_notes_count: Math.max(0, (rec.unresolved_notes_count || 1) - 1) } : rec));
+        setChatsList(prev => prev.map(c => c.record.id === activeChatRecordId ? { ...c, record: { ...c.record, unresolved_notes_count: Math.max(0, (c.record.unresolved_notes_count || 1) - 1) } } : c));
+        triggerToast("Note marked as resolved.", "success");
+      } else {
+        triggerToast("Failed to resolve note.", "error");
+      }
+    } catch (err) {
+      console.error("Error resolving note:", err);
+      triggerToast("Failed to resolve note.", "error");
     }
   };
 
@@ -322,10 +420,10 @@ function App() {
   // LIFECYCLE & POLLING
   // ----------------------------------------------------
   // Keep latest filter, search, page state in a ref to avoid stale closures in the polling interval
-  const pollingStateRef = useRef({ currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName });
+  const pollingStateRef = useRef({ currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter });
   useEffect(() => {
-    pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName };
-  }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName]);
+    pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter };
+  }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter]);
 
   useEffect(() => {
     if (!token) return;
@@ -334,7 +432,7 @@ function App() {
     fetchStats(selectedTemplateName);
     fetchTemplatesList(true);
     fetchBranches();
-    fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
+    fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, pipelineTagFilter, pendingNotesFilter);
 
     // Poll statistics and grid periodically to pick up async background sends
     const interval = setInterval(() => {
@@ -349,6 +447,8 @@ function App() {
         pollingStateRef.current.search, 
         pollingStateRef.current.branchFilter, 
         pollingStateRef.current.templateFilter,
+        pollingStateRef.current.pipelineTagFilter,
+        pollingStateRef.current.pendingNotesFilter,
         false
       ); // silent refresh without full loader
     }, 6000);
@@ -391,8 +491,8 @@ function App() {
   useEffect(() => {
     if (!token) return;
     setCurrentPage(1);
-    fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
-  }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, templateFilter, token]);
+    fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, pipelineTagFilter, pendingNotesFilter);
+  }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, templateFilter, pipelineTagFilter, pendingNotesFilter, token]);
 
   // Handle search changes with 300ms debounce
   useEffect(() => {
@@ -401,7 +501,7 @@ function App() {
     
     searchTimeoutRef.current = setTimeout(() => {
       setCurrentPage(1);
-      fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
+      fetchRecords(1, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, pipelineTagFilter, pendingNotesFilter);
     }, 300);
 
     return () => clearTimeout(searchTimeoutRef.current);
@@ -410,7 +510,7 @@ function App() {
   // Reset selected checkboxes on filter/search or page change
   useEffect(() => {
     setSelectedRecordIds([]);
-  }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, templateFilter, search, currentPage]);
+  }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, templateFilter, pipelineTagFilter, pendingNotesFilter, search, currentPage]);
 
   // Scroll sandbox logs to bottom
 
@@ -534,8 +634,19 @@ function App() {
   };
 
   // Fetch paginated grid records
-  const fetchRecords = async (page, dispatchF, deliveryF, readF, responseF, searchTerm, branchF, templateF, showLoader = true) => {
-    if (showLoader) setGridLoading(true);
+  const fetchRecords = async (page, dispatchF, deliveryF, readF, responseF, searchTerm, branchF, templateF, tagF = 'all', pendingNotesF = false, showLoader = true) => {
+    // If showLoader is passed as false in the 10th or 11th position, we adjust.
+    // To handle calls where pendingNotesF is omitted but showLoader is passed as the 10th parameter:
+    let actualPendingNotes = pendingNotesF;
+    let actualShowLoader = showLoader;
+    if (typeof pendingNotesF === 'boolean' && showLoader === undefined) {
+      // If only 10 arguments are passed and the 10th is a boolean, it might be showLoader.
+      // But we always pass 11 arguments from our calls, so this is just for safety.
+      actualShowLoader = pendingNotesF;
+      actualPendingNotes = false;
+    }
+    
+    if (actualShowLoader) setGridLoading(true);
     
     const params = new URLSearchParams();
     params.append('page', page);
@@ -549,6 +660,14 @@ function App() {
 
     if (templateF && templateF !== 'all') {
       params.append('template', templateF);
+    }
+
+    if (tagF && tagF !== 'all') {
+      params.append('pipeline_tag', tagF);
+    }
+
+    if (actualPendingNotes) {
+      params.append('has_unresolved_notes', 'true');
     }
 
     // Level 1: Dispatch
@@ -982,6 +1101,8 @@ function App() {
       pollingStateRef.current.search, 
       pollingStateRef.current.branchFilter,
       pollingStateRef.current.templateFilter,
+      pollingStateRef.current.pipelineTagFilter,
+      pollingStateRef.current.pendingNotesFilter,
       false
     );
   };
@@ -1100,7 +1221,7 @@ function App() {
     const target = currentPage + dir;
     if (target >= 1 && target <= totalPages) {
       setCurrentPage(target);
-      fetchRecords(target, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter);
+      fetchRecords(target, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, pipelineTagFilter, pendingNotesFilter);
     }
   };
 
@@ -1258,9 +1379,15 @@ function App() {
           >
             💬 Live Chat & Auto-Reply
           </button>
+          <button 
+            className={`tab-btn ${activeView === 'bot-builder' ? 'active' : ''}`}
+            onClick={() => setActiveView('bot-builder')}
+          >
+            🤖 Visual Bot Builder
+          </button>
         </div>
 
-        {activeView === 'outreach' ? (
+        {activeView === 'outreach' && (
           <>
             {/* Analytics statistical counters grid */}
             <section className="analytics-grid">
@@ -1811,6 +1938,34 @@ function App() {
                   ))}
                 </select>
               </div>
+
+              <div className="filter-group">
+                <span className="filter-label">Pipeline Tag</span>
+                <select 
+                  value={pipelineTagFilter} 
+                  onChange={(e) => setPipelineTagFilter(e.target.value)} 
+                  className="filter-select"
+                >
+                  <option value="all">All Tags</option>
+                  <option value="Lead">Lead</option>
+                  <option value="Contacted">Contacted</option>
+                  <option value="Interested">Interested</option>
+                  <option value="Enrolled">Enrolled</option>
+                  <option value="Not Interested">Not Interested</option>
+                </select>
+              </div>
+
+              <div className="filter-group">
+                <span className="filter-label">Pending Notes</span>
+                <select 
+                  value={pendingNotesFilter ? 'true' : 'all'} 
+                  onChange={(e) => setPendingNotesFilter(e.target.value === 'true')} 
+                  className="filter-select"
+                >
+                  <option value="all">All Records</option>
+                  <option value="true">With Pending Notes</option>
+                </select>
+              </div>
             </div>
 
             <div className="grid-header-actions" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1937,13 +2092,14 @@ function App() {
                   <th>Phone Number</th>
                   <th>Delivery Status</th>
                   <th>Response</th>
+                  <th>Pipeline Tag</th>
                   <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {gridLoading ? (
                   <tr className="state-loading">
-                    <td colSpan={9}>
+                    <td colSpan={10}>
                       <div className="loading-spinner-container">
                         <div className="spinner"></div>
                         <span>Loading records...</span>
@@ -1952,7 +2108,7 @@ function App() {
                   </tr>
                 ) : gridError ? (
                   <tr className="state-empty">
-                    <td colSpan={9}>
+                    <td colSpan={10}>
                       <div className="empty-container">
                         <svg className="empty-icon text-coral" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
@@ -1966,7 +2122,7 @@ function App() {
                   </tr>
                 ) : records.length === 0 ? (
                   <tr className="state-empty">
-                    <td colSpan={9}>
+                    <td colSpan={10}>
                       <div className="empty-container">
                         <svg className="empty-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                           <circle cx="12" cy="12" r="10"></circle>
@@ -1992,6 +2148,13 @@ function App() {
                     if (respLower === 'interested') respBadge = 'badge-interested';
                     if (respLower === 'not interested') respBadge = 'badge-not-interested';
 
+                    const tagVal = rec.pipeline_tag || 'Lead';
+                    let tagBadge = 'badge-tag-lead';
+                    if (tagVal === 'Contacted') tagBadge = 'badge-tag-contacted';
+                    if (tagVal === 'Interested') tagBadge = 'badge-tag-interested';
+                    if (tagVal === 'Enrolled') tagBadge = 'badge-tag-enrolled';
+                    if (tagVal === 'Not Interested') tagBadge = 'badge-tag-not-interested';
+
                     return (
                       <tr key={rec.id}>
                         <td style={{ textAlign: 'center' }}>
@@ -2013,7 +2176,30 @@ function App() {
                           />
                         </td>
                         <td>
-                          <span className="cell-title">{rec.student_name}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span className="cell-title">{rec.student_name}</span>
+                            {rec.unresolved_notes_count > 0 && (
+                              <span 
+                                title={`${rec.unresolved_notes_count} pending notes/actions`} 
+                                style={{
+                                  backgroundColor: '#fffbeb',
+                                  color: '#d97706',
+                                  border: '1px solid #fde68a',
+                                  borderRadius: '50%',
+                                  width: '18px',
+                                  height: '18px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 'bold',
+                                  cursor: 'help'
+                                }}
+                              >
+                                📝
+                              </span>
+                            )}
+                          </div>
                           <span className="cell-subtitle">ID: {rec.id}</span>
                         </td>
                         <td>
@@ -2040,6 +2226,11 @@ function App() {
                         <td>
                           <span className={`badge ${respBadge}`}>
                         {rec.parent_response}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={`badge ${tagBadge}`}>
+                            {tagVal}
                           </span>
                         </td>
                         <td className="text-right">
@@ -2093,7 +2284,9 @@ function App() {
           </div>
         </section>
           </>
-        ) : (
+        )}
+
+        {activeView === 'chat' && (
           <div className="chat-container">
             {/* 1. Recent Chats List Pane */}
             <div className="glass-panel chat-list-panel">
@@ -2138,6 +2331,14 @@ function App() {
                   const lastMsg = chat.last_message;
                   const initials = chat.record.student_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
                   const lastMsgTime = lastMsg ? new Date(lastMsg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+                  
+                  const tagVal = chat.record.pipeline_tag || 'Lead';
+                  let tagBadge = 'badge-tag-lead';
+                  if (tagVal === 'Contacted') tagBadge = 'badge-tag-contacted';
+                  if (tagVal === 'Interested') tagBadge = 'badge-tag-interested';
+                  if (tagVal === 'Enrolled') tagBadge = 'badge-tag-enrolled';
+                  if (tagVal === 'Not Interested') tagBadge = 'badge-tag-not-interested';
+
                   return (
                     <div 
                       key={chat.record.id} 
@@ -2145,14 +2346,22 @@ function App() {
                       onClick={() => {
                         setActiveChatRecordId(chat.record.id);
                         fetchChatHistory(chat.record.id);
+                        fetchChatNotes(chat.record.id);
+                        setActiveChatSubTab('chat');
                         setMobileActiveSubView('thread');
                       }}
                     >
                       <div className="avatar-circle">{initials}</div>
                       <div className="conv-details">
-                        <div className="conv-name-row">
-                          <span className="conv-name">{chat.record.student_name}</span>
-                          <span className="conv-time">{lastMsgTime}</span>
+                        <div className="conv-name-row" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'space-between', width: '100%' }}>
+                          <span className="conv-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100px', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            {chat.record.student_name}
+                            {chat.record.unresolved_notes_count > 0 && (
+                              <span title={`${chat.record.unresolved_notes_count} pending notes`} style={{ fontSize: '0.85rem' }}>📝</span>
+                            )}
+                          </span>
+                          <span className={`badge ${tagBadge}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem', fontWeight: '600' }}>{tagVal}</span>
+                          <span className="conv-time" style={{ whiteSpace: 'nowrap' }}>{lastMsgTime}</span>
                         </div>
                         <p className="conv-msg-preview">{lastMsg ? lastMsg.message_text : 'No messages yet'}</p>
                       </div>
@@ -2183,57 +2392,205 @@ function App() {
                       {(() => {
                         const activeChat = chatsList.find(c => c.record.id === activeChatRecordId);
                         return (
-                          <>
-                            <h4>{activeChat ? activeChat.record.student_name : 'Loading...'}</h4>
-                            <p className="chat-header-meta">
-                              {activeChat ? `${activeChat.record.phone_number} | Branch: ${activeChat.record.selected_branch}` : ''}
-                            </p>
-                          </>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div>
+                              <h4>{activeChat ? activeChat.record.student_name : 'Loading...'}</h4>
+                              <p className="chat-header-meta">
+                                {activeChat ? `${activeChat.record.phone_number} | Branch: ${activeChat.record.selected_branch}` : ''}
+                              </p>
+                            </div>
+                            {activeChat && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--color-text-muted)' }}>Tag:</span>
+                                <select 
+                                  value={activeChat.record.pipeline_tag || 'Lead'}
+                                  onChange={(e) => handleUpdateTag(activeChat.record.id, e.target.value)}
+                                  className="filter-select"
+                                  style={{ padding: '0.25rem 0.5rem', height: '30px', fontSize: '0.8rem', width: '130px' }}
+                                >
+                                  <option value="Lead">Lead</option>
+                                  <option value="Contacted">Contacted</option>
+                                  <option value="Interested">Interested</option>
+                                  <option value="Enrolled">Enrolled</option>
+                                  <option value="Not Interested">Not Interested</option>
+                                </select>
+                              </div>
+                            )}
+                          </div>
                         );
                       })()}
                     </div>
                   </div>
-                  <div className="chat-messages-area">
-                    {chatHistory.map((msg, index) => {
-                      const bubbleClass = msg.sender === 'parent' ? 'parent' : msg.sender === 'counselor' ? 'counselor' : 'system';
-                      const senderLabel = msg.sender === 'parent' ? 'Student/Parent' : msg.sender === 'counselor' ? 'Counselor' : 'Bot / Outreach';
-                      const msgTime = new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                      return (
-                        <div key={msg.id || index} className={`message-bubble-row ${bubbleClass}`}>
-                          <div className="message-bubble">{msg.message_text}</div>
-                          <div className="message-meta-info">
-                            <span>{senderLabel}</span> • <span>{msgTime}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {chatHistory.length === 0 && (
-                      <div className="chat-empty-state">
-                        <p>No messages in this chat yet.</p>
-                      </div>
-                    )}
-                  </div>
-                  <div className="chat-input-area">
-                    <textarea 
-                      placeholder="Type your response here..." 
-                      className="chat-input-box"
-                      value={typedMessage}
-                      onChange={(e) => setTypedMessage(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          sendManualMessage();
-                        }
-                      }}
-                    />
+                  
+                  <div className="chat-window-tabs" style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', backgroundColor: '#f8fafc' }}>
                     <button 
-                      className="btn btn-primary"
-                      onClick={sendManualMessage}
-                      disabled={sendingChat || !typedMessage.trim()}
+                      onClick={() => setActiveChatSubTab('chat')}
+                      style={{
+                        flex: 1,
+                        padding: '0.75rem',
+                        fontSize: '0.85rem',
+                        fontWeight: '600',
+                        color: activeChatSubTab === 'chat' ? 'var(--color-blue)' : 'var(--color-text-muted)',
+                        borderBottom: activeChatSubTab === 'chat' ? '2px solid var(--color-blue)' : 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        borderTop: 'none',
+                        borderLeft: 'none',
+                        borderRight: 'none'
+                      }}
                     >
-                      {sendingChat ? 'Sending...' : 'Send'}
+                      💬 Chat History
+                    </button>
+                    <button 
+                      onClick={() => setActiveChatSubTab('notes')}
+                      style={{
+                        flex: 1,
+                        padding: '0.75rem',
+                        fontSize: '0.85rem',
+                        fontWeight: '600',
+                        color: activeChatSubTab === 'notes' ? 'var(--color-blue)' : 'var(--color-text-muted)',
+                        borderBottom: activeChatSubTab === 'notes' ? '2px solid var(--color-blue)' : 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        borderTop: 'none',
+                        borderLeft: 'none',
+                        borderRight: 'none'
+                      }}
+                    >
+                      📝 Counselor Notes {chatNotes.length > 0 ? `(${chatNotes.length})` : ''}
                     </button>
                   </div>
+
+                  {activeChatSubTab === 'chat' ? (
+                    <>
+                      <div className="chat-messages-area">
+                        {chatHistory.map((msg, index) => {
+                          const bubbleClass = msg.sender === 'parent' ? 'parent' : msg.sender === 'counselor' ? 'counselor' : 'system';
+                          const senderLabel = msg.sender === 'parent' ? 'Student/Parent' : msg.sender === 'counselor' ? 'Counselor' : 'Bot / Outreach';
+                          const msgTime = new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                          return (
+                            <div key={msg.id || index} className={`message-bubble-row ${bubbleClass}`}>
+                              <div className="message-bubble">{msg.message_text}</div>
+                              <div className="message-meta-info">
+                                <span>{senderLabel}</span> • <span>{msgTime}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {chatHistory.length === 0 && (
+                          <div className="chat-empty-state">
+                            <p>No messages in this chat yet.</p>
+                          </div>
+                        )}
+                      </div>
+                      <div className="chat-input-area">
+                        <textarea 
+                          placeholder="Type your response here..." 
+                          className="chat-input-box"
+                          value={typedMessage}
+                          onChange={(e) => setTypedMessage(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              sendManualMessage();
+                            }
+                          }}
+                        />
+                        <button 
+                          className="btn btn-primary"
+                          onClick={sendManualMessage}
+                          disabled={sendingChat || !typedMessage.trim()}
+                        >
+                          {sendingChat ? 'Sending...' : 'Send'}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="chat-messages-area" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '1.25rem', height: 'calc(100% - 100px)' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flexGrow: 1, overflowY: 'auto', paddingRight: '0.25rem' }}>
+                        {chatNotes.map((note) => {
+                          const noteTime = new Date(note.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+                          const isResolved = note.resolved;
+                          return (
+                            <div key={note.id} style={{
+                              backgroundColor: isResolved ? 'var(--color-grey-light)' : '#fffbeb',
+                              border: isResolved ? '1px solid var(--color-grey-border)' : '1px solid var(--color-amber-border)',
+                              borderRadius: 'var(--radius-sm)',
+                              padding: '0.85rem 1rem',
+                              boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+                              textAlign: 'left',
+                              opacity: isResolved ? 0.75 : 1
+                            }}>
+                              <p style={{ 
+                                fontSize: '0.875rem', 
+                                color: isResolved ? 'var(--color-grey)' : '#1e293b', 
+                                lineHeight: '1.4', 
+                                whiteSpace: 'pre-wrap', 
+                                margin: 0,
+                                textDecoration: isResolved ? 'line-through' : 'none'
+                              }}>
+                                {note.note_text}
+                              </p>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: isResolved ? 'var(--color-grey)' : 'var(--color-amber)', marginTop: '0.5rem', fontWeight: '500' }}>
+                                <span>By: {note.created_by} • {noteTime}</span>
+                                {isResolved ? (
+                                  <span style={{ color: 'var(--color-emerald)', fontWeight: 'bold' }}>✓ Resolved</span>
+                                ) : (
+                                  <button
+                                    onClick={() => resolveChatNote(note.id)}
+                                    style={{
+                                      backgroundColor: 'var(--color-emerald)',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: 'var(--radius-sm)',
+                                      padding: '0.2rem 0.5rem',
+                                      fontSize: '0.65rem',
+                                      cursor: 'pointer',
+                                      fontWeight: '600'
+                                    }}
+                                  >
+                                    Resolve
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {chatNotes.length === 0 && (
+                          <div className="chat-empty-state" style={{ padding: '2rem' }}>
+                            <p>No internal notes recorded for this candidate yet.</p>
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <textarea 
+                          placeholder="Type internal counselor notes here... (e.g. details from call, parent responses, etc.)"
+                          value={newNoteText}
+                          onChange={(e) => setNewNoteText(e.target.value)}
+                          style={{
+                            width: '100%',
+                            minHeight: '80px',
+                            padding: '0.75rem',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border-color)',
+                            fontSize: '0.875rem',
+                            resize: 'vertical',
+                            fontFamily: 'inherit'
+                          }}
+                        />
+                        <button 
+                          onClick={addChatNote}
+                          disabled={addingNote || !newNoteText.trim()}
+                          className="btn btn-primary"
+                          style={{ alignSelf: 'flex-end', padding: '0.5rem 1.25rem' }}
+                        >
+                          {addingNote ? 'Saving...' : 'Save Note'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="chat-empty-state">
@@ -2312,6 +2669,10 @@ function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {activeView === 'bot-builder' && (
+          <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} />
         )}
       </main>
 

@@ -64,6 +64,9 @@ class Record(Base):
     # Template name used for dispatching
     sent_template: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
+    # Tagging/Pipeline state (e.g. Lead, Contacted, Interested, Enrolled)
+    pipeline_tag: Mapped[Optional[str]] = mapped_column(String(50), default="Lead", server_default="Lead")
+    
     # Timestamps
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -88,6 +91,7 @@ class Record(Base):
             "parent_response": self.parent_response,
             "message_id": self.message_id,
             "sent_template": self.sent_template,
+            "pipeline_tag": self.pipeline_tag or "Lead",
             "sent_at": self.sent_at.isoformat() if self.sent_at else None,
             "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
             "read_at": self.read_at.isoformat() if self.read_at else None,
@@ -208,6 +212,59 @@ class AutoReplyRule(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
 
+class RecordNote(Base):
+    __tablename__ = "record_notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("records.id", ondelete="CASCADE"), nullable=False, index=True)
+    note_text: Mapped[str] = mapped_column(String(1000), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(100), default="Counselor")
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "record_id": self.record_id,
+            "note_text": self.note_text,
+            "created_by": self.created_by,
+            "resolved": self.resolved,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+class BotFlow(Base):
+    __tablename__ = "bot_flows"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), default="Default Flow", server_default="Default Flow")
+    flow_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "flow_data": self.flow_data,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        }
+
 async def init_db():
     """Initializes the database schema by creating required tables and seeding default template."""
     async with engine.begin() as conn:
@@ -223,6 +280,8 @@ async def init_db():
         await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT false"))
         await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS sent_template VARCHAR(255)"))
         await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'"))
+        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS pipeline_tag VARCHAR(50) DEFAULT 'Lead'"))
+        await conn.execute(text("ALTER TABLE record_notes ADD COLUMN IF NOT EXISTS resolved BOOLEAN DEFAULT false"))
         
     # Seed default templates if empty
     async with AsyncSessionLocal() as session:

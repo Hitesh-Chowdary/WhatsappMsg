@@ -23,7 +23,7 @@ PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 if BACKEND_DIR not in sys.path:
     sys.path.append(BACKEND_DIR)
 
-from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser, CampaignLog, ChatMessage, AutoReplyRule
+from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser, CampaignLog, ChatMessage, AutoReplyRule, RecordNote, BotFlow
 from whatsapp_service import get_whatsapp_client, WhatsAppClient
 
 # Configure logging
@@ -67,9 +67,20 @@ class SendMessagePayload(BaseModel):
     record_id: int
     message_text: str
 
+class UpdateTagPayload(BaseModel):
+    pipeline_tag: str
+
+class AddNotePayload(BaseModel):
+    note_text: str
+
 class AutoReplyRulePayload(BaseModel):
     keyword: str
     reply_text: str
+    is_active: Optional[bool] = True
+
+class BotFlowPayload(BaseModel):
+    name: str
+    flow_data: dict
     is_active: Optional[bool] = True
 
 # Background task for bulk message broadcasting
@@ -1602,6 +1613,88 @@ async def handle_quick_reply_auto_response(
         logger.info(f"Auto-response sent and logged for record ID {record.id} quick reply '{button_text}'.")
 
 # Helper to process incoming text replies and trigger auto-responder
+async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict]:
+    """
+    Checks if there is an active BotFlow and traverses it to find a matching response.
+    Falls back to AutoReplyRules if no active BotFlow exists or no match is found in the flow.
+    """
+    normalized_text = message_text.lower().strip()
+    
+    # 1. Check active BotFlow
+    stmt = select(BotFlow).where(BotFlow.is_active == True).limit(1)
+    res = await db.execute(stmt)
+    active_flow = res.scalars().first()
+    
+    if active_flow and active_flow.flow_data:
+        # Traverse BotFlow
+        nodes = active_flow.flow_data.get("nodes", [])
+        edges = active_flow.flow_data.get("edges", [])
+        
+        # Find trigger node that matches the message text
+        trigger_node = None
+        for node in nodes:
+            if node.get("type") == "trigger":
+                keyword = node.get("data", {}).get("keyword", "").lower().strip()
+                if keyword and keyword in normalized_text:
+                    trigger_node = node
+                    break
+        
+        # If no explicit keyword trigger matches, look for default trigger
+        if not trigger_node:
+            for node in nodes:
+                if node.get("type") == "trigger":
+                    keyword = node.get("data", {}).get("keyword", "").lower().strip()
+                    if keyword == "default" or keyword == "fallback":
+                        trigger_node = node
+                        break
+                        
+        if trigger_node:
+            # Find edge originating from this trigger node
+            trigger_id = trigger_node.get("id")
+            next_node_id = None
+            for edge in edges:
+                if edge.get("source") == trigger_id:
+                    next_node_id = edge.get("target")
+                    break
+            
+            if next_node_id:
+                # Find the next node (should be a message node)
+                for node in nodes:
+                    if node.get("id") == next_node_id and node.get("type") == "message":
+                        data = node.get("data", {})
+                        reply_text = data.get("text", "")
+                        buttons = data.get("buttons", [])
+                        # Strip empty buttons
+                        buttons = [b.strip() for b in buttons if b and b.strip()]
+                        return {
+                            "reply_text": reply_text,
+                            "buttons": buttons,
+                            "source_keyword": trigger_node.get("data", {}).get("keyword", "default")
+                        }
+                        
+    # 2. Fallback to AutoReplyRules (Legacy)
+    rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
+    rules_res = await db.execute(rules_stmt)
+    all_rules = rules_res.scalars().all()
+    
+    matched_rule = None
+    for rule in all_rules:
+        if rule.keyword != "default" and rule.keyword.lower() in normalized_text:
+            matched_rule = rule
+            break
+            
+    if not matched_rule:
+        matched_rule = next((r for r in all_rules if r.keyword == "default"), None)
+        
+    if matched_rule:
+        return {
+            "reply_text": matched_rule.reply_text,
+            "buttons": [],
+            "source_keyword": matched_rule.keyword
+        }
+        
+    return None
+
 async def handle_incoming_text_reply(
     from_phone: str,
     message_text: str,
@@ -1640,42 +1733,40 @@ async def handle_incoming_text_reply(
     )
     db.add(chat_msg)
     
-    # 3. Check for matching Auto-Reply rule
-    normalized_text = message_text.lower().strip()
-    rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
-    rules_res = await db.execute(rules_stmt)
-    all_rules = rules_res.scalars().all()
+    # 3. Check for matching response
+    response_data = await get_bot_response(message_text, db)
     
-    matched_rule = None
-    # Prioritize non-default keyword match
-    for rule in all_rules:
-        if rule.keyword != "default" and rule.keyword.lower() in normalized_text:
-            matched_rule = rule
-            break
-            
-    # Fallback to default
-    if not matched_rule:
-        matched_rule = next((r for r in all_rules if r.keyword == "default"), None)
+    source_keyword = "None"
+    if response_data:
+        reply_text = response_data["reply_text"]
+        buttons = response_data.get("buttons", [])
+        source_keyword = response_data["source_keyword"]
         
-    if matched_rule:
         whatsapp_client = get_whatsapp_client()
-        response = await whatsapp_client.send_free_form_message(
-            to_phone=from_phone,
-            message_text=matched_rule.reply_text
-        )
+        if buttons:
+            response = await whatsapp_client.send_interactive_message(
+                to_phone=from_phone,
+                message_text=reply_text,
+                buttons=buttons
+            )
+        else:
+            response = await whatsapp_client.send_free_form_message(
+                to_phone=from_phone,
+                message_text=reply_text
+            )
         
         # Save auto-reply message
         auto_msg_id = response.get("message_id") if response.get("status") == "success" else f"auto_fail_{uuid.uuid4().hex[:12]}"
         auto_chat_msg = ChatMessage(
             record_id=record.id,
             sender="system",
-            message_text=matched_rule.reply_text,
+            message_text=reply_text,
             message_id=auto_msg_id
         )
         db.add(auto_chat_msg)
         
         # Update record response state
-        record.parent_response = f"Replied ({matched_rule.keyword})"
+        record.parent_response = f"Replied ({source_keyword})"
         record.responded_at = datetime.utcnow()
         
         # Mirror updates to latest CampaignLog if it exists
@@ -1683,12 +1774,12 @@ async def handle_incoming_text_reply(
         log_res = await db.execute(log_stmt)
         latest_log = log_res.scalars().first()
         if latest_log:
-            latest_log.parent_response = f"Replied ({matched_rule.keyword})"
+            latest_log.parent_response = f"Replied ({source_keyword})"
             latest_log.responded_at = record.responded_at
             latest_log.delivery_status = "Read"
 
     await db.commit()
-    logger.info(f"Handled incoming reply from {from_phone} successfully. Matched rule: {matched_rule.keyword if matched_rule else 'None'}")
+    logger.info(f"Handled incoming reply from {from_phone} successfully. Matched rule: {source_keyword}")
     return {"status": "success", "record_id": record.id}
 
 # Real-Time Webhook Verification Endpoint (GET)
@@ -1823,34 +1914,36 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         rec = rec_res.scalars().first()
                         if rec:
                             # Run async trigger without duplicating parent message
-                            normalized_text = (payload_obj.button_text or "Interested").lower().strip()
-                            rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
-                            rules_res = await db.execute(rules_stmt)
-                            all_rules = rules_res.scalars().all()
-                            matched_rule = None
-                            for rule in all_rules:
-                                if rule.keyword != "default" and rule.keyword.lower() in normalized_text:
-                                    matched_rule = rule
-                                    break
-                            if not matched_rule:
-                                matched_rule = next((r for r in all_rules if r.keyword == "default"), None)
-                            if matched_rule:
+                            button_text = payload_obj.button_text or "Interested"
+                            response_data = await get_bot_response(button_text, db)
+                            if response_data:
+                                reply_text = response_data["reply_text"]
+                                buttons = response_data.get("buttons", [])
+                                source_keyword = response_data["source_keyword"]
+                                
                                 import uuid
                                 whatsapp_client = get_whatsapp_client()
-                                response = await whatsapp_client.send_free_form_message(
-                                    to_phone=rec.phone_number,
-                                    message_text=matched_rule.reply_text
-                                )
+                                if buttons:
+                                    response = await whatsapp_client.send_interactive_message(
+                                        to_phone=rec.phone_number,
+                                        message_text=reply_text,
+                                        buttons=buttons
+                                    )
+                                else:
+                                    response = await whatsapp_client.send_free_form_message(
+                                        to_phone=rec.phone_number,
+                                        message_text=reply_text
+                                    )
                                 auto_chat_msg = ChatMessage(
                                     record_id=rec.id,
                                     sender="system",
-                                    message_text=matched_rule.reply_text,
+                                    message_text=reply_text,
                                     message_id=response.get("message_id") if response.get("status") == "success" else f"auto_fail_{uuid.uuid4().hex[:12]}"
                                 )
                                 db.add(auto_chat_msg)
-                                rec.parent_response = f"Replied ({matched_rule.keyword})"
+                                rec.parent_response = f"Replied ({source_keyword})"
                                 rec.responded_at = datetime.utcnow()
-                                log.parent_response = f"Replied ({matched_rule.keyword})"
+                                log.parent_response = f"Replied ({source_keyword})"
                                 log.responded_at = rec.responded_at
                                 log.delivery_status = "Read"
                 
@@ -1990,6 +2083,8 @@ async def get_records_list(
     responded: Optional[str] = None,
     branch: Optional[str] = None,
     template: Optional[str] = None,
+    pipeline_tag: Optional[str] = None,
+    has_unresolved_notes: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
@@ -2064,6 +2159,23 @@ async def get_records_list(
         else:
             stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response == "No Response"))
             
+    if pipeline_tag:
+        if pipeline_tag.lower() == "lead":
+            stmt = stmt.where(or_(Record.pipeline_tag == None, Record.pipeline_tag.ilike("lead")))
+        else:
+            stmt = stmt.where(Record.pipeline_tag.ilike(pipeline_tag))
+            
+    if has_unresolved_notes and has_unresolved_notes.lower() == "true":
+        from sqlalchemy import exists
+        stmt = stmt.where(
+            exists().where(
+                and_(
+                    RecordNote.record_id == Record.id,
+                    RecordNote.resolved == False
+                )
+            )
+        )
+
     # Count total matches
     count_stmt = select(func.count()).select_from(stmt.subquery())
     count_result = await db.execute(count_stmt)
@@ -2076,9 +2188,23 @@ async def get_records_list(
     
     total_pages = (total_count + limit - 1) // limit
     
+    # Pre-fetch unresolved notes counts
+    record_ids = [r.id for r, _ in rows]
+    unresolved_counts = {}
+    if record_ids:
+        notes_stmt = select(RecordNote.record_id, func.count(RecordNote.id)).where(
+            and_(
+                RecordNote.record_id.in_(record_ids),
+                RecordNote.resolved == False
+            )
+        ).group_by(RecordNote.record_id)
+        notes_res = await db.execute(notes_stmt)
+        unresolved_counts = {record_id: count for record_id, count in notes_res.all()}
+    
     records_list = []
     for r, log in rows:
         record_dict = r.to_dict()
+        record_dict["unresolved_notes_count"] = unresolved_counts.get(r.id, 0)
         if log:
             record_dict["campaign_status"] = log.campaign_status
             record_dict["delivery_status"] = log.delivery_status
@@ -2107,6 +2233,94 @@ async def get_records_list(
         "page": page,
         "limit": limit,
         "pages": total_pages
+    }
+
+@app.post("/api/v1/records/{id}/tag")
+async def update_record_tag(
+    id: int,
+    payload: UpdateTagPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Updates the pipeline tag of a candidate record (e.g. Lead, Contacted, Interested, Enrolled)."""
+    stmt = select(Record).where(Record.id == id)
+    res = await db.execute(stmt)
+    record = res.scalar_one_or_none()
+    
+    if not record:
+        raise HTTPException(status_code=404, detail="Candidate record not found.")
+        
+    record.pipeline_tag = payload.pipeline_tag
+    await db.commit()
+    
+    return {
+        "status": "success",
+        "message": f"Pipeline tag updated to '{record.pipeline_tag}' for {record.student_name}.",
+        "pipeline_tag": record.pipeline_tag
+    }
+
+@app.get("/api/v1/records/{id}/notes")
+async def get_record_notes(
+    id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves all internal notes for a candidate record, sorted newest first."""
+    stmt = select(RecordNote).where(RecordNote.record_id == id).order_by(RecordNote.created_at.desc())
+    res = await db.execute(stmt)
+    notes = res.scalars().all()
+    return [note.to_dict() for note in notes]
+
+@app.post("/api/v1/records/{id}/notes")
+async def add_record_note(
+    id: int,
+    payload: AddNotePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Adds a new internal counselor note to a candidate record."""
+    stmt = select(Record).where(Record.id == id)
+    res = await db.execute(stmt)
+    record = res.scalar_one_or_none()
+    
+    if not record:
+        raise HTTPException(status_code=404, detail="Candidate record not found.")
+        
+    note = RecordNote(
+        record_id=id,
+        note_text=payload.note_text,
+        created_by="Counselor"
+    )
+    db.add(note)
+    await db.commit()
+    
+    return {
+        "status": "success",
+        "message": "Internal note added successfully.",
+        "note": note.to_dict()
+    }
+
+@app.post("/api/v1/notes/{note_id}/resolve")
+async def resolve_record_note(
+    note_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Marks an internal counselor note as resolved."""
+    stmt = select(RecordNote).where(RecordNote.id == note_id)
+    res = await db.execute(stmt)
+    note = res.scalar_one_or_none()
+    
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found.")
+        
+    note.resolved = True
+    await db.commit()
+    
+    return {
+        "status": "success",
+        "message": "Note marked as resolved.",
+        "note": note.to_dict()
     }
 
 # Filtered Records Excel Export API
@@ -2254,10 +2468,25 @@ async def get_recent_chats(
     result = await db.execute(stmt)
     rows = result.all()
     
+    # Pre-fetch unresolved notes counts
+    record_ids = [rec.id for rec, _ in rows]
+    unresolved_counts = {}
+    if record_ids:
+        notes_stmt = select(RecordNote.record_id, func.count(RecordNote.id)).where(
+            and_(
+                RecordNote.record_id.in_(record_ids),
+                RecordNote.resolved == False
+            )
+        ).group_by(RecordNote.record_id)
+        notes_res = await db.execute(notes_stmt)
+        unresolved_counts = {record_id: count for record_id, count in notes_res.all()}
+
     recent_chats = []
     for rec, msg in rows:
+        rec_dict = rec.to_dict()
+        rec_dict["unresolved_notes_count"] = unresolved_counts.get(rec.id, 0)
         recent_chats.append({
-            "record": rec.to_dict(),
+            "record": rec_dict,
             "last_message": msg.to_dict()
         })
     return recent_chats
@@ -2375,3 +2604,56 @@ async def delete_auto_reply_rule(
     await db.execute(stmt)
     await db.commit()
     return {"status": "success", "message": f"Rule ID {rule_id} deleted."}
+
+@app.get("/api/v1/bot/flows")
+async def get_bot_flows(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves all bot flows."""
+    stmt = select(BotFlow).order_by(BotFlow.updated_at.desc())
+    res = await db.execute(stmt)
+    flows = res.scalars().all()
+    return [f.to_dict() for f in flows]
+
+@app.post("/api/v1/bot/flows")
+async def save_bot_flow(
+    payload: BotFlowPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Saves or updates a bot flow. Automatically deactivates others if active is true."""
+    if payload.is_active:
+        from sqlalchemy import update
+        await db.execute(update(BotFlow).values(is_active=False))
+        
+    stmt = select(BotFlow).where(BotFlow.name == payload.name)
+    res = await db.execute(stmt)
+    flow = res.scalar_one_or_none()
+    
+    if flow:
+        flow.flow_data = payload.flow_data
+        flow.is_active = payload.is_active if payload.is_active is not None else True
+    else:
+        flow = BotFlow(
+            name=payload.name,
+            flow_data=payload.flow_data,
+            is_active=payload.is_active if payload.is_active is not None else True
+        )
+        db.add(flow)
+        
+    await db.commit()
+    return {"status": "success", "flow": flow.to_dict()}
+
+@app.delete("/api/v1/bot/flows/{flow_id}")
+async def delete_bot_flow(
+    flow_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Deletes a bot flow."""
+    from sqlalchemy import delete
+    stmt = delete(BotFlow).where(BotFlow.id == flow_id)
+    await db.execute(stmt)
+    await db.commit()
+    return {"status": "success", "message": f"Flow ID {flow_id} deleted."}
