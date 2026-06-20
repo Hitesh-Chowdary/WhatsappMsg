@@ -67,6 +67,10 @@ class SendMessagePayload(BaseModel):
     record_id: int
     message_text: str
 
+class SendTemplatePayload(BaseModel):
+    record_id: int
+    template_name: str
+
 class UpdateTagPayload(BaseModel):
     pipeline_tag: str
 
@@ -2169,6 +2173,28 @@ async def get_dashboard_stats(
             CampaignLog.parent_response == "Not Interested"
         )
     )
+
+    delivered_stmt = select(func.count(Record.id)).join(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template,
+            CampaignLog.delivery_status.in_(["Delivered", "Read"])
+        )
+    )
+
+    replied_stmt = select(func.count(Record.id)).join(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template,
+            CampaignLog.parent_response.not_in(["No Response", None])
+        )
+    )
+
+    enrolled_stmt = select(func.count(Record.id)).where(
+        Record.pipeline_tag == "Enrolled"
+    )
     
     # Run async queries
     total_q = await db.execute(total_stmt)
@@ -2177,6 +2203,9 @@ async def get_dashboard_stats(
     failed_q = await db.execute(failed_stmt)
     interested_q = await db.execute(interested_stmt)
     not_interested_q = await db.execute(not_interested_stmt)
+    delivered_q = await db.execute(delivered_stmt)
+    replied_q = await db.execute(replied_stmt)
+    enrolled_q = await db.execute(enrolled_stmt)
     
     total_val = total_q.scalar() or 0
     sent_val = sent_q.scalar() or 0
@@ -2184,6 +2213,9 @@ async def get_dashboard_stats(
     failed_val = failed_q.scalar() or 0
     interested_val = interested_q.scalar() or 0
     not_interested_val = not_interested_q.scalar() or 0
+    delivered_val = delivered_q.scalar() or 0
+    replied_val = replied_q.scalar() or 0
+    enrolled_val = enrolled_q.scalar() or 0
     
     # Unsent/Pending: Total - Sent - Failed
     unsent_val = max(0, total_val - sent_val - failed_val)
@@ -2195,7 +2227,10 @@ async def get_dashboard_stats(
         "read": read_val,
         "failed": failed_val,
         "interested": interested_val,
-        "not_interested": not_interested_val
+        "not_interested": not_interested_val,
+        "delivered": delivered_val,
+        "replied": replied_val,
+        "enrolled": enrolled_val
     }
 
 # Dynamic Branches Lookup API
@@ -2314,6 +2349,8 @@ async def get_records_list(
                 )
             )
         )
+
+
 
     # Count total matches
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -2636,11 +2673,35 @@ async def get_chat_history(
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
-    """Retrieves full conversation message history for a specific candidate."""
+    """Retrieves full conversation message history and session status for a specific candidate."""
+    from datetime import timedelta
     stmt = select(ChatMessage).where(ChatMessage.record_id == record_id).order_by(ChatMessage.created_at.asc())
     res = await db.execute(stmt)
     messages = res.scalars().all()
-    return [msg.to_dict() for msg in messages]
+    
+    session_active = False
+    session_expires_at = None
+    time_remaining_seconds = 0
+    
+    # Find the last message sent by the parent
+    last_parent_msg = next((msg for msg in reversed(messages) if msg.sender == "parent"), None)
+    if last_parent_msg:
+        now_utc = datetime.utcnow()
+        time_diff = now_utc - last_parent_msg.created_at
+        diff_seconds = time_diff.total_seconds()
+        if diff_seconds < 86400: # 24 hours
+            session_active = True
+            time_remaining_seconds = int(86400 - diff_seconds)
+            session_expires_at = (last_parent_msg.created_at + timedelta(hours=24)).isoformat()
+            
+    return {
+        "messages": [msg.to_dict() for msg in messages],
+        "session": {
+            "active": session_active,
+            "expires_at": session_expires_at,
+            "time_remaining_seconds": time_remaining_seconds
+        }
+    }
 
 @app.post("/api/v1/chat/send")
 async def send_manual_chat_message(
@@ -2689,6 +2750,100 @@ async def send_manual_chat_message(
         latest_log.delivery_status = "Read"
         
     await db.commit()
+    return {"status": "success", "message": chat_msg.to_dict()}
+
+@app.post("/api/v1/chat/send-template")
+async def send_manual_chat_template(
+    request: Request,
+    payload: SendTemplatePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Sends a pre-approved template message to a candidate from the chat window (e.g. to resume session)."""
+    stmt = select(Record).where(Record.id == payload.record_id)
+    res = await db.execute(stmt)
+    record = res.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Candidate record not found.")
+
+    t_stmt = select(CampaignTemplate).where(CampaignTemplate.template_name == payload.template_name)
+    t_res = await db.execute(t_stmt)
+    template = t_res.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found.")
+
+    msg_body = template.template_text
+    record_vars = record.variables or {}
+    fallback_vars = {
+        "student_name": record.student_name,
+        "parent_name": record.parent_name,
+        "selected_branch": record.selected_branch,
+        "student": record.student_name,
+        "parent": record.parent_name,
+        "branch": record.selected_branch,
+        "status": record.selected_branch,
+    }
+    merged_vars = {**fallback_vars, **record_vars}
+
+    # Replace bracket placeholders with merged variables
+    import re
+    placeholders = re.findall(r"\[(.*?)\]", msg_body)
+    for p in placeholders:
+        p_lower = p.strip().lower()
+        p_key_normalized = p_lower.replace("_", "").replace(" ", "")
+        if p_lower in merged_vars:
+            msg_body = msg_body.replace(f"[{p}]", str(merged_vars[p_lower]))
+        else:
+            for key, val in merged_vars.items():
+                if key.replace("_", "").replace(" ", "") == p_key_normalized:
+                    msg_body = msg_body.replace(f"[{p}]", str(val))
+                    break
+
+    client_type = request.headers.get("x-whatsapp-client-type")
+    client = get_whatsapp_client(client_type)
+    
+    response = await client.send_message(
+        to_phone=record.phone_number,
+        message_body=msg_body,
+        media_type=template.media_type or "none",
+        media_url=template.media_url,
+        template_variables=merged_vars,
+        template_name=template.template_name,
+        template_language=template.language or "en_US",
+        variable_names=[v.strip() for v in template.variable_names.split(",") if v.strip()] if template.variable_names else []
+    )
+
+    if response.get("status") != "success":
+        raise HTTPException(status_code=500, detail=response.get("message", "Failed to send WhatsApp template."))
+
+    log_obj = CampaignLog(
+        record_id=record.id,
+        template_name=template.template_name,
+        message_id=response.get("message_id"),
+        campaign_status="Sent",
+        delivery_status="Sent",
+        parent_response="No Response",
+        sent_at=datetime.utcnow()
+    )
+    db.add(log_obj)
+
+    chat_msg = ChatMessage(
+        record_id=record.id,
+        sender="counselor",
+        message_text=f"Template Sent: {template.template_name}\n\n{msg_body}",
+        message_id=response.get("message_id")
+    )
+    db.add(chat_msg)
+
+    record.campaign_status = "Sent"
+    record.delivery_status = "Sent"
+    record.parent_response = "No Response"
+    record.sent_template = template.template_name
+    record.sent_at = log_obj.sent_at
+    record.message_id = log_obj.message_id
+
+    await db.commit()
+    
     return {"status": "success", "message": chat_msg.to_dict()}
 
 @app.get("/api/v1/chat/rules")

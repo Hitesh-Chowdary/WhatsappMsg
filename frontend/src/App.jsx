@@ -7,6 +7,7 @@ const RECORDS_PER_PAGE = 15;
 function App() {
   // Auth State
   const [token, setToken] = useState(localStorage.getItem('jwt_token') || null);
+  const [currentUser, setCurrentUser] = useState(localStorage.getItem('currentUser') || null);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -67,7 +68,9 @@ function App() {
       }
       
       localStorage.setItem('jwt_token', data.access_token);
+      localStorage.setItem('currentUser', data.username || loginUsername);
       setToken(data.access_token);
+      setCurrentUser(data.username || loginUsername);
       triggerToast("Logged in successfully.", "success");
     } catch (err) {
       setLoginError(err.message || "Failed to connect to the authentication server.");
@@ -78,7 +81,9 @@ function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('jwt_token');
+    localStorage.removeItem('currentUser');
     setToken(null);
+    setCurrentUser(null);
     setLoginUsername('');
     setLoginPassword('');
     triggerToast("Logged out successfully.", "info");
@@ -101,6 +106,7 @@ function App() {
   const [pendingNotesFilter, setPendingNotesFilter] = useState(false);
   const [branches, setBranches] = useState([]);
   const [selectedRecordIds, setSelectedRecordIds] = useState([]);
+
 
   // Custom Confirm Modal State
   const [confirmModal, setConfirmModal] = useState({
@@ -174,15 +180,86 @@ function App() {
   const [chatNotes, setChatNotes] = useState([]);
   const [newNoteText, setNewNoteText] = useState('');
   const [addingNote, setAddingNote] = useState(false);
+  const [chatSession, setChatSession] = useState({ active: false, expires_at: null, time_remaining_seconds: 0 });
+  const [selectedChatTemplate, setSelectedChatTemplate] = useState('');
+  const [forceFreeForm, setForceFreeForm] = useState(false);
+
+  const [secondsLeft, setSecondsLeft] = useState(0);
+
+  useEffect(() => {
+    setSecondsLeft(chatSession.time_remaining_seconds || 0);
+  }, [chatSession.time_remaining_seconds]);
+
+  useEffect(() => {
+    if (!chatSession.active || secondsLeft <= 0) return;
+
+    const timer = setInterval(() => {
+      setSecondsLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setChatSession(curr => ({ ...curr, active: false }));
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [chatSession.active, secondsLeft]);
+
+  const formatSecondsToHMS = (totalSeconds) => {
+    if (!totalSeconds || totalSeconds <= 0) return "00:00:00";
+    const hrs = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    
+    const pad = (num) => String(num).padStart(2, '0');
+    return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
+  };
 
   // --- Chat & Auto-Reply API Handlers ---
   
+  const playChime = () => {
+    try {
+      const audio = new Audio("https://assets.mixkit.co/active_storage/sfx/2869/2869-84.wav");
+      audio.volume = 0.45;
+      audio.play().catch(e => console.log("Audio autoplay prevented by browser. Interaction required first."));
+    } catch (err) {
+      console.error("Failed to play notification chime:", err);
+    }
+  };
+
   const fetchRecentChats = async () => {
     try {
       const res = await authFetch(`${API_BASE}/api/v1/chat/recent`);
       if (res.ok) {
         const data = await res.json();
-        setChatsList(data);
+        setChatsList(prev => {
+          let shouldPlay = false;
+          data.forEach(newChat => {
+            const oldChat = prev.find(c => c.record.id === newChat.record.id);
+            const newMsg = newChat.last_message;
+            
+            // Play sound if a new message arrives from parent
+            if (newMsg && newMsg.sender === 'parent') {
+              if (!oldChat || !oldChat.last_message || oldChat.last_message.id !== newMsg.id) {
+                shouldPlay = true;
+              }
+            }
+            
+            // Play sound if parent response transitions to "Counselor Needed"
+            if (newChat.record.parent_response === 'Counselor Needed') {
+              if (!oldChat || oldChat.record.parent_response !== 'Counselor Needed') {
+                shouldPlay = true;
+              }
+            }
+          });
+          
+          if (shouldPlay) {
+            playChime();
+          }
+          return data;
+        });
       }
     } catch (err) {
       console.error("Error fetching recent chats:", err);
@@ -225,7 +302,8 @@ function App() {
       const res = await authFetch(`${API_BASE}/api/v1/chat/history/${recordId}`);
       if (res.ok) {
         const data = await res.json();
-        setChatHistory(data);
+        setChatHistory(data.messages || []);
+        setChatSession(data.session || { active: false, expires_at: null, time_remaining_seconds: 0 });
       }
     } catch (err) {
       console.error("Error fetching chat history:", err);
@@ -314,6 +392,37 @@ function App() {
       }
     } catch (err) {
       triggerToast("Error sending message.", "error");
+      console.error(err);
+    } finally {
+      setSendingChat(false);
+    }
+  };
+
+  const sendManualTemplateMessage = async () => {
+    if (!selectedChatTemplate || !activeChatRecordId) return;
+    setSendingChat(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/chat/send-template`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          record_id: activeChatRecordId,
+          template_name: selectedChatTemplate
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSelectedChatTemplate('');
+        setChatHistory(prev => [...prev, data.message]);
+        setForceFreeForm(false);
+        fetchRecentChats();
+        fetchChatHistory(activeChatRecordId);
+        triggerToast("Template sent successfully!", "success");
+      } else {
+        triggerToast(data.detail || "Failed to send template.", "error");
+      }
+    } catch (err) {
+      triggerToast("Error sending template.", "error");
       console.error(err);
     } finally {
       setSendingChat(false);
@@ -620,6 +729,8 @@ function App() {
       console.error("Failed to load statistics counters.");
     }
   };
+
+
 
   // Fetch unique academic branches present in database
   const fetchBranches = async () => {
@@ -1225,6 +1336,16 @@ function App() {
     }
   };
 
+  const formatSessionTime = (seconds) => {
+    if (!seconds || seconds <= 0) return "expired";
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    if (hrs > 0) {
+      return `${hrs}hr ${mins}m left`;
+    }
+    return `${mins}m left`;
+  };
+
   // ----------------------------------------------------
   // HTML ESCAPE AND UTILITIES
   // ----------------------------------------------------
@@ -1339,53 +1460,117 @@ function App() {
     );
   }
 
+  const getHeaderContent = () => {
+    switch (activeView) {
+      case 'outreach':
+        return {
+          meta: "Campaigns & Ingestion",
+          title: "Outreach Dashboard",
+          subtitle: "Upload student directories via Excel, trigger template broadcasts, and track real-time delivery conversion rates."
+        };
+      case 'chat':
+        return {
+          meta: "Live Support & Notes",
+          title: "Live Chat & Counselor Inbox",
+          subtitle: "Communicate directly with parents, review automated bot history, and manage internal counselor follow-up notes."
+        };
+      case 'bot-builder':
+        return {
+          meta: "Automation Engine",
+          title: "Visual Auto-Bot Flow Builder",
+          subtitle: "Design parent interactive response paths, configure button callbacks, and edit direct messaging scripts."
+        };
+      default:
+        return {
+          meta: "Admissions Portal",
+          title: "Admissions AI Engine",
+          subtitle: "Manage parent communications and automated candidate engagement channels."
+        };
+    }
+  };
+
+  const header = getHeaderContent();
+
   return (
     <div className={`app-wrapper mobile-view-${mobileActiveSubView}`}>
+      {/* 1. Left Sidebar Navigation */}
+      <aside className="app-sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-logo">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </div>
+          <span className="sidebar-brand-title">Admissions AI</span>
+        </div>
+
+        <nav className="sidebar-menu">
+          <button 
+            className={`sidebar-menu-item ${activeView === 'outreach' ? 'active' : ''}`}
+            onClick={() => setActiveView('outreach')}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            </svg>
+            Outreach Dashboard
+          </button>
+
+          <button 
+            className={`sidebar-menu-item ${activeView === 'chat' ? 'active' : ''}`}
+            onClick={() => setActiveView('chat')}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            Live Chat Support
+          </button>
+
+          <button 
+            className={`sidebar-menu-item ${activeView === 'bot-builder' ? 'active' : ''}`}
+            onClick={() => setActiveView('bot-builder')}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="9" y1="3" x2="9" y2="21"></line>
+              <line x1="9" y1="12" x2="21" y2="12"></line>
+            </svg>
+            Visual Bot Builder
+          </button>
+
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="sidebar-user-info">
+            <div className="sidebar-user-avatar">A</div>
+            <div className="sidebar-user-details">
+              <span className="sidebar-user-name">Admissions Staff</span>
+              <span className="sidebar-user-role">Administrator</span>
+            </div>
+          </div>
+
+          <button onClick={handleLogout} className="btn btn-secondary btn-sidebar-logout">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6.6px' }}>
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+              <polyline points="16 17 21 12 16 7"></polyline>
+              <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+            Sign Out
+          </button>
+        </div>
+      </aside>
+
       {/* 2. Main Content View Area */}
       <main className="app-content">
         
         {/* Header Title Bar */}
         <header className="dashboard-header">
           <div className="header-titles">
-            <span className="header-meta">Access Management</span>
-            <h1>Student Accounts</h1>
-            <p className="subtitle">Create student accounts individually or provision them in bulk by importing spreadsheets.</p>
-          </div>
-          
-          <div style={{ display: 'flex', gap: '12px' }}>
-
-            <button onClick={handleLogout} className="btn btn-secondary" style={{ borderColor: 'var(--color-coral)', color: 'var(--color-coral)' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                <polyline points="16 17 21 12 16 7"></polyline>
-                <line x1="21" y1="12" x2="9" y2="12"></line>
-              </svg>
-              Logout
-            </button>
+            <span className="header-meta">{header.meta}</span>
+            <h1>{header.title}</h1>
+            <p className="subtitle">{header.subtitle}</p>
           </div>
         </header>
-
-        {/* Tab Navigation */}
-        <div className="tab-navigation">
-          <button 
-            className={`tab-btn ${activeView === 'outreach' ? 'active' : ''}`}
-            onClick={() => setActiveView('outreach')}
-          >
-            📢 Outreach Dashboard
-          </button>
-          <button 
-            className={`tab-btn ${activeView === 'chat' ? 'active' : ''}`}
-            onClick={() => setActiveView('chat')}
-          >
-            💬 Live Chat & Auto-Reply
-          </button>
-          <button 
-            className={`tab-btn ${activeView === 'bot-builder' ? 'active' : ''}`}
-            onClick={() => setActiveView('bot-builder')}
-          >
-            🤖 Visual Bot Builder
-          </button>
-        </div>
 
         <div style={{ display: activeView === 'outreach' ? 'flex' : 'none', flexDirection: 'column', gap: '2rem' }}>
             {/* Analytics statistical counters grid */}
@@ -1476,6 +1661,80 @@ function App() {
               <h3 className="stat-value">{(stats.failed || 0).toLocaleString()}</h3>
               <p className="stat-desc">Requires manual retry</p>
             </div>
+          </div>
+        </section>
+
+        {/* Interactive Funnel Analytics Panel */}
+        <section className="glass-panel analytics-funnel-card" style={{ padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)', backgroundColor: 'white' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <div>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: '700', color: 'var(--color-text-dark)', margin: 0 }}>Interactive Conversion Funnel</h3>
+              <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', margin: '2px 0 0 0' }}>Track candidates from initial dispatch to successful enrollment</p>
+            </div>
+            <div style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', borderRadius: '20px', backgroundColor: 'var(--color-blue-light)', color: 'var(--color-blue)', fontWeight: '600' }}>
+              Real-time Flow Analysis
+            </div>
+          </div>
+          
+          <div className="funnel-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {(() => {
+              const baseValue = stats.sent || 1;
+              const steps = [
+                { label: "Sent Outreach Messages", value: stats.sent, color: "var(--color-purple)", desc: "Campaign broadcasts successfully dispatched" },
+                { label: "Delivered to Device", value: stats.delivered || 0, color: "var(--color-blue)", desc: "Received on parent's phone" },
+                { label: "Read / Opened", value: stats.read, color: "var(--color-amber)", desc: "Opened and viewed by recipient" },
+                { label: "Replied / Inbound", value: stats.replied || 0, color: "var(--color-coral)", desc: "Engaged in conversation" },
+                { label: "Interested Candidates", value: stats.interested, color: "var(--color-emerald)", desc: "Marked interested by counselor or bot" },
+                { label: "Enrolled Students", value: stats.enrolled || 0, color: "#10b981", desc: "Successfully admitted to college" }
+              ];
+              
+              return steps.map((step, idx) => {
+                const prevStep = idx > 0 ? steps[idx - 1] : null;
+                const prevValue = prevStep ? prevStep.value : baseValue;
+                
+                const overallPct = stats.sent > 0 ? ((step.value / stats.sent) * 100).toFixed(1) : '0.0';
+                const stepPct = prevValue > 0 ? ((step.value / prevValue) * 100).toFixed(1) : '0.0';
+                
+                return (
+                  <div key={idx} className="funnel-step" style={{ display: 'flex', alignItems: 'center', gap: '1rem', width: '100%', padding: '0.5rem', borderRadius: '8px' }}>
+                    <div style={{ width: '180px', display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--color-text-dark)' }}>{step.label}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>{step.desc}</span>
+                    </div>
+                    <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <div style={{ flexGrow: 1, height: '18px', backgroundColor: '#f1f5f9', borderRadius: '9px', overflow: 'hidden', position: 'relative' }}>
+                        <div style={{ 
+                          width: `${Math.min(100, Math.max(0.5, (step.value / baseValue) * 100))}%`, 
+                          height: '100%', 
+                          backgroundColor: step.color,
+                          borderRadius: '9px',
+                          transition: 'width 0.6s ease'
+                        }} />
+                        <span style={{ 
+                          position: 'absolute', 
+                          left: '10px', 
+                          top: '50%', 
+                          transform: 'translateY(-50%)', 
+                          fontSize: '0.7rem', 
+                          fontWeight: '700', 
+                          color: (step.value / baseValue) * 100 > 15 ? 'white' : 'var(--color-text-dark)'
+                        }}>
+                          {step.value.toLocaleString()}
+                        </span>
+                      </div>
+                      <div style={{ width: '120px', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                        <span style={{ color: 'var(--color-text-muted)' }}>
+                          Step: <strong style={{ color: 'var(--color-text-dark)' }}>{stepPct}%</strong>
+                        </span>
+                        <span style={{ color: 'var(--color-text-muted)' }}>
+                          Total: <strong style={{ color: 'var(--color-text-dark)' }}>{overallPct}%</strong>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         </section>
 
@@ -1954,6 +2213,7 @@ function App() {
                 </select>
               </div>
 
+
               <div className="filter-group">
                 <span className="filter-label">Pending Notes</span>
                 <select 
@@ -2346,6 +2606,8 @@ function App() {
                         fetchChatNotes(chat.record.id);
                         setActiveChatSubTab('chat');
                         setMobileActiveSubView('thread');
+                        setSelectedChatTemplate('');
+                        setForceFreeForm(false);
                       }}
                     >
                       <div className="avatar-circle">{initials}</div>
@@ -2397,20 +2659,22 @@ function App() {
                               </p>
                             </div>
                             {activeChat && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--color-text-muted)' }}>Tag:</span>
-                                <select 
-                                  value={activeChat.record.pipeline_tag || 'Lead'}
-                                  onChange={(e) => handleUpdateTag(activeChat.record.id, e.target.value)}
-                                  className="filter-select"
-                                  style={{ padding: '0.25rem 0.5rem', height: '30px', fontSize: '0.8rem', width: '130px' }}
-                                >
-                                  <option value="Lead">Lead</option>
-                                  <option value="Contacted">Contacted</option>
-                                  <option value="Interested">Interested</option>
-                                  <option value="Enrolled">Enrolled</option>
-                                  <option value="Not Interested">Not Interested</option>
-                                </select>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                  <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--color-text-muted)' }}>Tag:</span>
+                                  <select 
+                                    value={activeChat.record.pipeline_tag || 'Lead'}
+                                    onChange={(e) => handleUpdateTag(activeChat.record.id, e.target.value)}
+                                    className="filter-select"
+                                    style={{ padding: '0.25rem 0.5rem', height: '30px', fontSize: '0.8rem', width: '120px' }}
+                                  >
+                                    <option value="Lead">Lead</option>
+                                    <option value="Contacted">Contacted</option>
+                                    <option value="Interested">Interested</option>
+                                    <option value="Enrolled">Enrolled</option>
+                                    <option value="Not Interested">Not Interested</option>
+                                  </select>
+                                </div>
                               </div>
                             )}
                           </div>
@@ -2482,26 +2746,118 @@ function App() {
                           </div>
                         )}
                       </div>
-                      <div className="chat-input-area">
-                        <textarea 
-                          placeholder="Type your response here..." 
-                          className="chat-input-box"
-                          value={typedMessage}
-                          onChange={(e) => setTypedMessage(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              sendManualMessage();
-                            }
-                          }}
-                        />
-                        <button 
-                          className="btn btn-primary"
-                          onClick={sendManualMessage}
-                          disabled={sendingChat || !typedMessage.trim()}
-                        >
-                          {sendingChat ? 'Sending...' : 'Send'}
-                        </button>
+                      <div className="chat-input-area" style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '1rem', borderTop: '1px solid var(--border-color)', backgroundColor: '#ffffff' }}>
+                        {(!chatSession.active && !forceFreeForm) ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-amber)', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="8" x2="12" y2="12"></line>
+                                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                              </svg>
+                              <span>WhatsApp 24h service session is inactive. Send a template message to resume:</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                              <select 
+                                value={selectedChatTemplate} 
+                                onChange={(e) => setSelectedChatTemplate(e.target.value)} 
+                                className="filter-select"
+                                style={{ flexGrow: 1, padding: '0.5rem', fontSize: '0.85rem', height: '38px', backgroundPosition: 'right 0.65rem center' }}
+                              >
+                                <option value="">-- Select Template --</option>
+                                {templatesList.filter(t => t.is_active).map(t => (
+                                  <option key={t.id} value={t.template_name}>{t.template_name}</option>
+                                ))}
+                              </select>
+                              <button 
+                                className="btn btn-primary"
+                                onClick={sendManualTemplateMessage}
+                                disabled={sendingChat || !selectedChatTemplate}
+                                style={{ backgroundColor: 'var(--color-amber)', borderColor: 'var(--color-amber)', height: '38px', padding: '0 1rem', fontSize: '0.8rem' }}
+                              >
+                                {sendingChat ? 'Sending...' : 'Send Template'}
+                              </button>
+                            </div>
+                            <div style={{ textAlign: 'center', marginTop: '2px' }}>
+                              <button 
+                                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '0.75rem', textDecoration: 'underline', cursor: 'pointer' }}
+                                onClick={() => setForceFreeForm(true)}
+                              >
+                                Force Free-Form Text
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                            {/* Status Line */}
+                            {chatSession.active && (
+                              <div style={{ fontSize: '0.72rem', color: 'var(--color-emerald)', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600, paddingLeft: '2px' }}>
+                                <span style={{ width: '6px', height: '6px', backgroundColor: 'var(--color-emerald)', borderRadius: '50%', display: 'inline-block' }}></span>
+                                <span>WhatsApp Session Active (Expires in {formatSecondsToHMS(secondsLeft)})</span>
+                              </div>
+                            )}
+                            {(!chatSession.active && forceFreeForm) && (
+                              <div style={{ fontSize: '0.72rem', color: 'var(--color-coral)', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600, paddingLeft: '2px' }}>
+                                <span>⚠️ Forcing Free-Form reply (expired session may fail to deliver)</span>
+                                <button 
+                                  onClick={() => setForceFreeForm(false)} 
+                                  style={{ background: 'none', border: 'none', color: 'var(--color-blue)', fontSize: '0.72rem', textDecoration: 'underline', cursor: 'pointer', marginLeft: '6px' }}
+                                >
+                                  Use Template instead
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Optional Template Quick Sender */}
+                            <div style={{ display: 'flex', gap: '8px', width: '100%', alignItems: 'center', borderBottom: '1px dashed #e2e8f0', paddingBottom: '8px' }}>
+                              <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>Or Send Template:</span>
+                              <select 
+                                value={selectedChatTemplate} 
+                                onChange={(e) => setSelectedChatTemplate(e.target.value)} 
+                                className="filter-select"
+                                style={{ flexGrow: 1, padding: '0.25rem 0.5rem', fontSize: '0.85rem', height: '32px', backgroundPosition: 'right 0.65rem center' }}
+                              >
+                                <option value="">-- Select Template --</option>
+                                {templatesList.filter(t => t.is_active).map(t => (
+                                  <option key={t.id} value={t.template_name}>{t.template_name}</option>
+                                ))}
+                              </select>
+                              <button 
+                                className="btn btn-secondary"
+                                onClick={sendManualTemplateMessage}
+                                disabled={sendingChat || !selectedChatTemplate}
+                                style={{ height: '32px', padding: '0 0.75rem', fontSize: '0.75rem' }}
+                              >
+                                Send Template
+                              </button>
+                            </div>
+
+                            {/* Free-form Input Text Box */}
+                            <div style={{ display: 'flex', gap: '8px', width: '100%', alignItems: 'center' }}>
+                              <textarea 
+                                placeholder="Type your response here..." 
+                                className="chat-input-box"
+                                value={typedMessage}
+                                onChange={(e) => setTypedMessage(e.target.value)}
+                                style={{ flexGrow: 1, height: '44px', margin: 0 }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    sendManualMessage();
+                                  }
+                                }}
+                              />
+                              <button 
+                                className="btn btn-primary"
+                                onClick={sendManualMessage}
+                                disabled={sendingChat || !typedMessage.trim()}
+                                style={{ height: '44px', padding: '0 1.25rem' }}
+                              >
+                                {sendingChat ? 'Sending...' : 'Send'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -2670,6 +3026,8 @@ function App() {
         <div style={{ display: activeView === 'bot-builder' ? 'block' : 'none', height: '100%', width: '100%' }}>
           <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} />
         </div>
+
+
       </main>
 
 
