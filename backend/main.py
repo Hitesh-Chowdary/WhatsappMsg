@@ -1612,6 +1612,28 @@ async def handle_quick_reply_auto_response(
         await db.commit()
         logger.info(f"Auto-response sent and logged for record ID {record.id} quick reply '{button_text}'.")
 
+def match_keyword(keyword: str, text: str) -> bool:
+    import re
+    if not keyword or not text:
+        return False
+    kw = keyword.lower().strip()
+    txt = text.lower().strip()
+    
+    # 1. Exact match (ignoring case & extra spaces)
+    if kw == txt:
+        return True
+        
+    # 2. Specific exclusion: if keyword is 'interested' but parent says 'not interested', it's a negative response
+    if kw == "interested" and "not interested" in txt:
+        return False
+        
+    # 3. Word boundary regex search
+    pattern = rf"\b{re.escape(kw)}\b"
+    if re.search(pattern, txt):
+        return True
+        
+    return False
+
 # Helper to process incoming text replies and trigger auto-responder
 async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict]:
     """
@@ -1635,7 +1657,7 @@ async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict
         for node in nodes:
             if node.get("type") == "trigger":
                 keyword = node.get("data", {}).get("keyword", "").lower().strip()
-                if keyword and keyword in normalized_text:
+                if keyword and match_keyword(keyword, normalized_text):
                     trigger_node = node
                     break
         
@@ -1679,7 +1701,7 @@ async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict
     
     matched_rule = None
     for rule in all_rules:
-        if rule.keyword != "default" and rule.keyword.lower() in normalized_text:
+        if rule.keyword != "default" and match_keyword(rule.keyword, normalized_text):
             matched_rule = rule
             break
             
