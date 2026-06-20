@@ -2198,7 +2198,13 @@ async def get_dashboard_stats(
         )
     )
 
-    enrolled_stmt = select(func.count(Record.id)).where(
+    enrolled_stmt = select(func.count(Record.id)).join(
+        CampaignLog,
+        and_(
+            CampaignLog.record_id == Record.id,
+            CampaignLog.template_name == selected_template
+        )
+    ).where(
         Record.pipeline_tag == "Enrolled"
     )
     

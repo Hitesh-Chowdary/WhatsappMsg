@@ -182,7 +182,6 @@ function App() {
   const [addingNote, setAddingNote] = useState(false);
   const [chatSession, setChatSession] = useState({ active: false, expires_at: null, time_remaining_seconds: 0 });
   const [selectedChatTemplate, setSelectedChatTemplate] = useState('');
-  const [forceFreeForm, setForceFreeForm] = useState(false);
 
   const [secondsLeft, setSecondsLeft] = useState(0);
 
@@ -2747,7 +2746,7 @@ function App() {
                         )}
                       </div>
                       <div className="chat-input-area" style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '1rem', borderTop: '1px solid var(--border-color)', backgroundColor: '#ffffff' }}>
-                        {(!chatSession.active && !forceFreeForm) ? (
+                        {!chatSession.active ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
                             <div style={{ fontSize: '0.75rem', color: 'var(--color-amber)', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -2778,35 +2777,14 @@ function App() {
                                 {sendingChat ? 'Sending...' : 'Send Template'}
                               </button>
                             </div>
-                            <div style={{ textAlign: 'center', marginTop: '2px' }}>
-                              <button 
-                                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '0.75rem', textDecoration: 'underline', cursor: 'pointer' }}
-                                onClick={() => setForceFreeForm(true)}
-                              >
-                                Force Free-Form Text
-                              </button>
-                            </div>
                           </div>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
                             {/* Status Line */}
-                            {chatSession.active && (
-                              <div style={{ fontSize: '0.72rem', color: 'var(--color-emerald)', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600, paddingLeft: '2px' }}>
-                                <span style={{ width: '6px', height: '6px', backgroundColor: 'var(--color-emerald)', borderRadius: '50%', display: 'inline-block' }}></span>
-                                <span>WhatsApp Session Active (Expires in {formatSecondsToHMS(secondsLeft)})</span>
-                              </div>
-                            )}
-                            {(!chatSession.active && forceFreeForm) && (
-                              <div style={{ fontSize: '0.72rem', color: 'var(--color-coral)', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600, paddingLeft: '2px' }}>
-                                <span>⚠️ Forcing Free-Form reply (expired session may fail to deliver)</span>
-                                <button 
-                                  onClick={() => setForceFreeForm(false)} 
-                                  style={{ background: 'none', border: 'none', color: 'var(--color-blue)', fontSize: '0.72rem', textDecoration: 'underline', cursor: 'pointer', marginLeft: '6px' }}
-                                >
-                                  Use Template instead
-                                </button>
-                              </div>
-                            )}
+                            <div style={{ fontSize: '0.72rem', color: 'var(--color-emerald)', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600, paddingLeft: '2px' }}>
+                              <span style={{ width: '6px', height: '6px', backgroundColor: 'var(--color-emerald)', borderRadius: '50%', display: 'inline-block' }}></span>
+                              <span>WhatsApp Session Active (Expires in {formatSecondsToHMS(secondsLeft)})</span>
+                            </div>
 
                             {/* Optional Template Quick Sender */}
                             <div style={{ display: 'flex', gap: '8px', width: '100%', alignItems: 'center', borderBottom: '1px dashed #e2e8f0', paddingBottom: '8px' }}>
