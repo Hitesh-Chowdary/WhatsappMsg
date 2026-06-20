@@ -2692,18 +2692,18 @@ function App() {
                                 )}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                                   <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--color-text-muted)' }}>Tag:</span>
-                                  <select 
-                                    value={activeChat.record.pipeline_tag || 'Lead'}
-                                    onChange={(e) => handleUpdateTag(activeChat.record.id, e.target.value)}
-                                    className="filter-select"
-                                    style={{ padding: '0.25rem 0.5rem', height: '30px', fontSize: '0.8rem', width: '120px' }}
+                                  <span 
+                                    className={`badge-tag-${(activeChat.record.pipeline_tag || 'Lead').toLowerCase().replace(' ', '-')}`}
+                                    style={{ 
+                                      padding: '0.25rem 0.5rem', 
+                                      borderRadius: '4px', 
+                                      fontSize: '0.75rem', 
+                                      fontWeight: '600',
+                                      display: 'inline-block' 
+                                    }}
                                   >
-                                    <option value="Lead">Lead</option>
-                                    <option value="Contacted">Contacted</option>
-                                    <option value="Interested">Interested</option>
-                                    <option value="Enrolled">Enrolled</option>
-                                    <option value="Not Interested">Not Interested</option>
-                                  </select>
+                                    {activeChat.record.pipeline_tag || 'Lead'}
+                                  </span>
                                 </div>
                               </div>
                             )}
