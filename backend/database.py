@@ -65,7 +65,7 @@ class Record(Base):
     sent_template: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
     # Tagging/Pipeline state (e.g. Lead, Contacted, Interested, Enrolled)
-    pipeline_tag: Mapped[Optional[str]] = mapped_column(String(50), default="Lead", server_default="Lead")
+    pipeline_tag: Mapped[Optional[str]] = mapped_column(String(50), default=None, nullable=True)
     
     # Timestamps
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

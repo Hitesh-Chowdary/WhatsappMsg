@@ -2214,10 +2214,9 @@ function App() {
                   className="filter-select"
                 >
                   <option value="all">All Tags</option>
-                  <option value="Lead">Lead</option>
+                  <option value="none">No Tag (Leads)</option>
                   <option value="Contacted">Contacted</option>
                   <option value="Interested">Interested</option>
-                  <option value="Enrolled">Enrolled</option>
                   <option value="Not Interested">Not Interested</option>
                 </select>
               </div>
@@ -2416,11 +2415,11 @@ function App() {
                     if (respLower === 'interested') respBadge = 'badge-interested';
                     if (respLower === 'not interested') respBadge = 'badge-not-interested';
 
-                    const tagVal = rec.pipeline_tag || 'Lead';
-                    let tagBadge = 'badge-tag-lead';
+                    const tagVal = rec.pipeline_tag;
+                    const isMainTag = ['Contacted', 'Interested', 'Not Interested'].includes(tagVal);
+                    let tagBadge = '';
                     if (tagVal === 'Contacted') tagBadge = 'badge-tag-contacted';
                     if (tagVal === 'Interested') tagBadge = 'badge-tag-interested';
-                    if (tagVal === 'Enrolled') tagBadge = 'badge-tag-enrolled';
                     if (tagVal === 'Not Interested') tagBadge = 'badge-tag-not-interested';
 
                     return (
@@ -2497,9 +2496,13 @@ function App() {
                           </span>
                         </td>
                         <td>
-                          <span className={`badge ${tagBadge}`}>
-                            {tagVal}
-                          </span>
+                          {isMainTag ? (
+                            <span className={`badge ${tagBadge}`}>
+                              {tagVal}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>—</span>
+                          )}
                         </td>
                         <td className="text-right">
                           <div className="table-actions">
@@ -2598,11 +2601,11 @@ function App() {
                   const initials = chat.record.student_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
                   const lastMsgTime = lastMsg ? new Date(lastMsg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
                   
-                  const tagVal = chat.record.pipeline_tag || 'Lead';
-                  let tagBadge = 'badge-tag-lead';
+                  const tagVal = chat.record.pipeline_tag;
+                  const isMainTag = ['Contacted', 'Interested', 'Not Interested'].includes(tagVal);
+                  let tagBadge = '';
                   if (tagVal === 'Contacted') tagBadge = 'badge-tag-contacted';
                   if (tagVal === 'Interested') tagBadge = 'badge-tag-interested';
-                  if (tagVal === 'Enrolled') tagBadge = 'badge-tag-enrolled';
                   if (tagVal === 'Not Interested') tagBadge = 'badge-tag-not-interested';
 
                   return (
@@ -2628,7 +2631,9 @@ function App() {
                               <span title={`${chat.record.unresolved_notes_count} pending notes`} style={{ fontSize: '0.85rem' }}>📝</span>
                             )}
                           </span>
-                          <span className={`badge ${tagBadge}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem', fontWeight: '600' }}>{tagVal}</span>
+                          {isMainTag && (
+                            <span className={`badge ${tagBadge}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem', fontWeight: '600' }}>{tagVal}</span>
+                          )}
                           <span className="conv-time" style={{ whiteSpace: 'nowrap' }}>{lastMsgTime}</span>
                         </div>
                         <p className="conv-msg-preview">{lastMsg ? lastMsg.message_text : 'No messages yet'}</p>

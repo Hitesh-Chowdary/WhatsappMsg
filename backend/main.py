@@ -2397,8 +2397,9 @@ async def get_records_list(
             stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response == "No Response"))
             
     if pipeline_tag:
-        if pipeline_tag.lower() == "lead":
-            stmt = stmt.where(or_(Record.pipeline_tag == None, Record.pipeline_tag.ilike("lead")))
+        val = pipeline_tag.lower()
+        if val in ["lead", "none", "no tag", "no_tag"]:
+            stmt = stmt.where(or_(Record.pipeline_tag == None, Record.pipeline_tag == "", Record.pipeline_tag.ilike("lead")))
         else:
             stmt = stmt.where(Record.pipeline_tag.ilike(pipeline_tag))
             
