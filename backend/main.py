@@ -1533,6 +1533,12 @@ async def process_webhook_event(
         rec.delivered_at = log.delivered_at
         rec.read_at = log.read_at
         rec.responded_at = log.responded_at
+        
+        # Auto-tag based on parent response
+        if rec.parent_response == "Interested":
+            rec.pipeline_tag = "Interested"
+        elif rec.parent_response == "Not Interested":
+            rec.pipeline_tag = "Not Interested"
             
     await db.commit()
     logger.info(f"Updated CampaignLog ID {log.id} status via webhook callback processing.")
@@ -1920,6 +1926,12 @@ async def handle_incoming_text_reply(
             record.parent_response = normalize_parent_response(source_keyword)
         record.responded_at = datetime.utcnow()
         
+        # Auto-tag based on parent response
+        if record.parent_response == "Interested":
+            record.pipeline_tag = "Interested"
+        elif record.parent_response == "Not Interested":
+            record.pipeline_tag = "Not Interested"
+        
         # Mirror updates to latest CampaignLog if it exists
         if latest_log:
             if latest_log.parent_response != "Counselor Needed":
@@ -2092,6 +2104,13 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                                 db.add(auto_chat_msg)
                                 rec.parent_response = normalize_parent_response(source_keyword)
                                 rec.responded_at = datetime.utcnow()
+                                
+                                # Auto-tag based on parent response
+                                if rec.parent_response == "Interested":
+                                    rec.pipeline_tag = "Interested"
+                                elif rec.parent_response == "Not Interested":
+                                    rec.pipeline_tag = "Not Interested"
+                                    
                                 log.parent_response = normalize_parent_response(source_keyword)
                                 log.responded_at = rec.responded_at
                                 log.delivery_status = "Read"
@@ -2326,6 +2345,12 @@ async def get_records_list(
     if parent_response:
         if parent_response.lower() == "no response":
             stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response.ilike("no response")))
+        elif parent_response.lower() == "interested":
+            stmt = stmt.where(
+                CampaignLog.parent_response != None,
+                ~CampaignLog.parent_response.ilike("no response"),
+                ~CampaignLog.parent_response.ilike("not interested")
+            )
         else:
             stmt = stmt.where(CampaignLog.parent_response.ilike(parent_response))
         
@@ -2439,6 +2464,25 @@ async def update_record_tag(
         raise HTTPException(status_code=404, detail="Candidate record not found.")
         
     record.pipeline_tag = payload.pipeline_tag
+    
+    # Sync parent response when tag is updated to Interested or Not Interested
+    if payload.pipeline_tag == "Not Interested":
+        record.parent_response = "Not Interested"
+        # Mirror to latest CampaignLog
+        log_stmt = select(CampaignLog).where(CampaignLog.record_id == id).order_by(CampaignLog.id.desc())
+        log_res = await db.execute(log_stmt)
+        latest_log = log_res.scalars().first()
+        if latest_log:
+            latest_log.parent_response = "Not Interested"
+    elif payload.pipeline_tag == "Interested":
+        record.parent_response = "Interested"
+        # Mirror to latest CampaignLog
+        log_stmt = select(CampaignLog).where(CampaignLog.record_id == id).order_by(CampaignLog.id.desc())
+        log_res = await db.execute(log_stmt)
+        latest_log = log_res.scalars().first()
+        if latest_log:
+            latest_log.parent_response = "Interested"
+            
     await db.commit()
     
     return {
@@ -2575,6 +2619,12 @@ async def export_records_to_excel(
     if parent_response:
         if parent_response.lower() == "no response":
             stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response.ilike("no response")))
+        elif parent_response.lower() == "interested":
+            stmt = stmt.where(
+                CampaignLog.parent_response != None,
+                ~CampaignLog.parent_response.ilike("no response"),
+                ~CampaignLog.parent_response.ilike("not interested")
+            )
         else:
             stmt = stmt.where(CampaignLog.parent_response.ilike(parent_response))
         

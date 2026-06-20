@@ -696,6 +696,52 @@ body {
 .badge-tag-enrolled { background-color: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
 .badge-tag-not-interested { background-color: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
 
+/* Quick Action Buttons in Live Chat Header */
+.btn-tag-contacted {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.65rem;
+    height: 30px;
+    border-radius: 6px;
+    border: 1px solid #bae6fd;
+    background-color: #e0f2fe;
+    color: #0369a1;
+    font-weight: 600;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.btn-tag-contacted:hover {
+    background-color: #bae6fd;
+    color: #0369a1;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(3, 105, 161, 0.1);
+}
+.btn-tag-not-interested {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.65rem;
+    height: 30px;
+    border-radius: 6px;
+    border: 1px solid #fecaca;
+    background-color: #fee2e2;
+    color: #b91c1c;
+    font-weight: 600;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.btn-tag-not-interested:hover {
+    background-color: #fecaca;
+    color: #b91c1c;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(185, 28, 28, 0.1);
+}
+
 /* Table Action Buttons Layout */
 .table-actions {
     display: inline-flex;

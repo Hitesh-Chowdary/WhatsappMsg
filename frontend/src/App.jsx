@@ -273,17 +273,30 @@ function App() {
       });
       if (res.ok) {
         triggerToast(`Pipeline tag updated to ${newTag}`, "success");
+        
+        const updatedParentResponse = newTag === 'Not Interested' ? 'Not Interested' 
+                                    : newTag === 'Interested' ? 'Interested' 
+                                    : null;
+
         // Update tag in chatsList state
         setChatsList(prev => prev.map(c => {
           if (c.record.id === recordId) {
-            return { ...c, record: { ...c.record, pipeline_tag: newTag } };
+            const updatedRec = { ...c.record, pipeline_tag: newTag };
+            if (updatedParentResponse) {
+              updatedRec.parent_response = updatedParentResponse;
+            }
+            return { ...c, record: updatedRec };
           }
           return c;
         }));
         // Update tag in records grid list state
         setRecords(prev => prev.map(r => {
           if (r.id === recordId) {
-            return { ...r, pipeline_tag: newTag };
+            const updatedRec = { ...r, pipeline_tag: newTag };
+            if (updatedParentResponse) {
+              updatedRec.parent_response = updatedParentResponse;
+            }
+            return updatedRec;
           }
           return r;
         }));
@@ -2659,6 +2672,24 @@ function App() {
                             </div>
                             {activeChat && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                {(activeChat.record.pipeline_tag === 'Interested' || activeChat.record.parent_response === 'Interested') && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <button 
+                                      onClick={() => handleUpdateTag(activeChat.record.id, 'Contacted')}
+                                      className="btn-tag-contacted"
+                                      title="Mark as Contacted"
+                                    >
+                                      Mark Contacted
+                                    </button>
+                                    <button 
+                                      onClick={() => handleUpdateTag(activeChat.record.id, 'Not Interested')}
+                                      className="btn-tag-not-interested"
+                                      title="Mark as Not Interested"
+                                    >
+                                      Mark Not Interested
+                                    </button>
+                                  </div>
+                                )}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                                   <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--color-text-muted)' }}>Tag:</span>
                                   <select 
