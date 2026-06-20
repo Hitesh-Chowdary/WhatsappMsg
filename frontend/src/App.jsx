@@ -2206,7 +2206,7 @@ function App() {
                 </select>
               </div>
 
-              <div className="filter-group">
+               <div className="filter-group">
                 <span className="filter-label">Pipeline Tag</span>
                 <select 
                   value={pipelineTagFilter} 
@@ -2214,23 +2214,10 @@ function App() {
                   className="filter-select"
                 >
                   <option value="all">All Tags</option>
-                  <option value="none">No Tag (Leads)</option>
+                  <option value="none">No Tag</option>
                   <option value="Contacted">Contacted</option>
                   <option value="Interested">Interested</option>
                   <option value="Not Interested">Not Interested</option>
-                </select>
-              </div>
-
-
-              <div className="filter-group">
-                <span className="filter-label">Pending Notes</span>
-                <select 
-                  value={pendingNotesFilter ? 'true' : 'all'} 
-                  onChange={(e) => setPendingNotesFilter(e.target.value === 'true')} 
-                  className="filter-select"
-                >
-                  <option value="all">All Records</option>
-                  <option value="true">With Pending Notes</option>
                 </select>
               </div>
             </div>
@@ -2675,15 +2662,15 @@ function App() {
                             {activeChat && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                                 {activeChat.record.parent_response === 'Interested' && 
-                                 activeChat.record.pipeline_tag !== 'Interested' && 
+                                 activeChat.record.pipeline_tag !== 'Contacted' && 
                                  activeChat.record.pipeline_tag !== 'Not Interested' && (
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                     <button 
-                                      onClick={() => handleUpdateTag(activeChat.record.id, 'Interested')}
-                                      className="btn-tag-interested"
-                                      title="Mark as Interested"
+                                      onClick={() => handleUpdateTag(activeChat.record.id, 'Contacted')}
+                                      className="btn-tag-contacted"
+                                      title="Mark as Contacted"
                                     >
-                                      Mark Interested
+                                      Mark Contacted
                                     </button>
                                     <button 
                                       onClick={() => handleUpdateTag(activeChat.record.id, 'Not Interested')}
@@ -2694,21 +2681,23 @@ function App() {
                                     </button>
                                   </div>
                                 )}
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                  <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--color-text-muted)' }}>Tag:</span>
-                                  <span 
-                                    className={`badge-tag-${(activeChat.record.pipeline_tag || 'Lead').toLowerCase().replace(' ', '-')}`}
-                                    style={{ 
-                                      padding: '0.25rem 0.5rem', 
-                                      borderRadius: '4px', 
-                                      fontSize: '0.75rem', 
-                                      fontWeight: '600',
-                                      display: 'inline-block' 
-                                    }}
-                                  >
-                                    {activeChat.record.pipeline_tag || 'Lead'}
-                                  </span>
-                                </div>
+                                {activeChat.record.pipeline_tag && ['Contacted', 'Interested', 'Not Interested'].includes(activeChat.record.pipeline_tag) && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--color-text-muted)' }}>Tag:</span>
+                                    <span 
+                                      className={`badge-tag-${activeChat.record.pipeline_tag.toLowerCase().replace(' ', '-')}`}
+                                      style={{ 
+                                        padding: '0.25rem 0.5rem', 
+                                        borderRadius: '4px', 
+                                        fontSize: '0.75rem', 
+                                        fontWeight: '600',
+                                        display: 'inline-block' 
+                                      }}
+                                    >
+                                      {activeChat.record.pipeline_tag}
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>

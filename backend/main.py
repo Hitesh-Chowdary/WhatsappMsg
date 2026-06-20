@@ -1523,9 +1523,7 @@ async def process_webhook_event(
         rec.responded_at = log.responded_at
         
         # Auto-tag based on parent response
-        if rec.parent_response == "Interested":
-            rec.pipeline_tag = "Interested"
-        elif rec.parent_response == "Not Interested":
+        if rec.parent_response == "Not Interested":
             rec.pipeline_tag = "Not Interested"
             
     await db.commit()
@@ -1953,9 +1951,7 @@ async def handle_incoming_text_reply(
         record.responded_at = datetime.utcnow()
         
         # Auto-tag based on parent response
-        if record.parent_response == "Interested":
-            record.pipeline_tag = "Interested"
-        elif record.parent_response == "Not Interested":
+        if record.parent_response == "Not Interested":
             record.pipeline_tag = "Not Interested"
         
         # Mirror updates to latest CampaignLog if it exists
