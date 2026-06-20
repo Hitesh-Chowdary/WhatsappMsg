@@ -1735,6 +1735,7 @@ async def handle_incoming_text_reply(
     db: AsyncSession
 ) -> Dict[str, Any]:
     import uuid
+    import re
     # 1. Normalize phone number (strip '+', check suffix match)
     clean_from = from_phone.strip().replace("+", "")
     
@@ -1766,9 +1767,88 @@ async def handle_incoming_text_reply(
     )
     db.add(chat_msg)
     
+    # Fetch latest CampaignLog for mirror updates
+    log_stmt = select(CampaignLog).where(CampaignLog.record_id == record.id).order_by(CampaignLog.id.desc()).limit(1)
+    log_res = await db.execute(log_stmt)
+    latest_log = log_res.scalars().first()
+    
     # 3. Check for matching response
     response_data = await get_bot_response(message_text, db)
     
+    # Check if incoming message is a standard greeting
+    normalized_incoming = message_text.lower().strip()
+    greetings = ["hi", "hello", "hey", "good morning", "start", "greetings"]
+    is_greeting = False
+    for g in greetings:
+        if re.search(rf"\b{re.escape(g)}\b", normalized_incoming):
+            is_greeting = True
+            break
+            
+    is_direct_inquiry = (record.selected_branch == "Direct Inquiry")
+    
+    # Check if we should override response with a professional welcome greeting
+    should_welcome = False
+    if is_direct_inquiry:
+        if is_greeting or not response_data or response_data.get("source_keyword") in ["default", "fallback"]:
+            should_welcome = True
+    else:
+        if is_greeting:
+            should_welcome = True
+            
+    if should_welcome:
+        welcome_text = (
+            f"Hello! Welcome to Dr. RVR NRI Institute of Technology. 🎓\n\n"
+            f"How can we help you today? Please reply with one of these keywords to get instant info:\n"
+            f"• *Admission* (for details & criteria)\n"
+            f"• *Branch* (to see available engineering branches)\n"
+            f"• *Location* (for campus address & map)\n"
+            f"• *Counselor* (to chat with a human representative)"
+        )
+        response_data = {
+            "reply_text": welcome_text,
+            "buttons": ["Admission Details", "Contact Counselor"],
+            "source_keyword": "welcome"
+        }
+        
+    # Check if this is a default/fallback message (to prevent loop spam)
+    if response_data and response_data.get("source_keyword") in ["default", "fallback"]:
+        # Query last system message
+        last_msg_stmt = (
+            select(ChatMessage)
+            .where(ChatMessage.record_id == record.id, ChatMessage.sender == "system")
+            .order_by(ChatMessage.id.desc())
+            .limit(1)
+        )
+        last_msg_res = await db.execute(last_msg_stmt)
+        last_system_msg = last_msg_res.scalars().first()
+        
+        fallback_text = response_data["reply_text"]
+        if last_system_msg and last_system_msg.message_text.strip() == fallback_text.strip():
+            # We already sent the fallback! Handover to counselor instead
+            handover_text = (
+                "I want to make sure you get the right information. I've notified our admissions team, "
+                "and a counselor will assist you here shortly. Thank you for your patience!"
+            )
+            
+            # If the last system message was already the handover text, do NOT reply anything to avoid spam
+            if last_system_msg.message_text.strip() == handover_text.strip():
+                logger.info(f"Fallback already sent and handover already sent. Suppressing auto-reply for record {record.id}")
+                record.parent_response = "Counselor Needed"
+                if latest_log:
+                    latest_log.parent_response = "Counselor Needed"
+                await db.commit()
+                return {"status": "success", "record_id": record.id}
+                
+            # Otherwise, override with handover message
+            response_data = {
+                "reply_text": handover_text,
+                "buttons": [],
+                "source_keyword": "handover"
+            }
+            record.parent_response = "Counselor Needed"
+            if latest_log:
+                latest_log.parent_response = "Counselor Needed"
+                
     source_keyword = "None"
     if response_data:
         reply_text = response_data["reply_text"]
@@ -1787,7 +1867,6 @@ async def handle_incoming_text_reply(
             reply_text = reply_text.replace("\\n", "\n")
             
             # Replace custom variables parsed from Excel spreadsheet columns
-            import re
             placeholders = re.findall(r"\[(.*?)\]", reply_text)
             for p in placeholders:
                 p_lower = p.strip().lower()
@@ -1827,15 +1906,14 @@ async def handle_incoming_text_reply(
         db.add(auto_chat_msg)
         
         # Update record response state
-        record.parent_response = normalize_parent_response(source_keyword)
+        if record.parent_response != "Counselor Needed":
+            record.parent_response = normalize_parent_response(source_keyword)
         record.responded_at = datetime.utcnow()
         
         # Mirror updates to latest CampaignLog if it exists
-        log_stmt = select(CampaignLog).where(CampaignLog.record_id == record.id).order_by(CampaignLog.id.desc()).limit(1)
-        log_res = await db.execute(log_stmt)
-        latest_log = log_res.scalars().first()
         if latest_log:
-            latest_log.parent_response = normalize_parent_response(source_keyword)
+            if latest_log.parent_response != "Counselor Needed":
+                latest_log.parent_response = normalize_parent_response(source_keyword)
             latest_log.responded_at = record.responded_at
             latest_log.delivery_status = "Read"
 
