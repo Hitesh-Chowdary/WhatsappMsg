@@ -1788,16 +1788,25 @@ def resolve_template_text(template_text: str, record, merged_vars: dict) -> str:
                     
     return msg_body
 
+def map_response_for_display(raw_response: Optional[str]) -> str:
+    if not raw_response:
+        return "No Response"
+    raw_lower = raw_response.lower().strip()
+    if raw_lower == "not interested":
+        return "Not Interested"
+    elif raw_lower in ["no response", "none", ""]:
+        return "No Response"
+    else:
+        return "Interested"
+
 def normalize_parent_response(source_keyword: str) -> str:
     if not source_keyword:
         return "No Response"
     normalized = source_keyword.lower().strip()
-    if normalized in ["interested", "yes", "confirm", "agree", "block seat"]:
-        return "Interested"
-    elif normalized in ["not interested", "no", "cancel", "decline", "not_interested"]:
+    if normalized in ["not interested", "no", "cancel", "decline", "not_interested"]:
         return "Not Interested"
     else:
-        return f"Replied ({source_keyword})"
+        return "Interested"
 
 async def handle_incoming_text_reply(
     from_phone: str,
@@ -2436,7 +2445,7 @@ async def get_records_list(
         if log:
             record_dict["campaign_status"] = log.campaign_status
             record_dict["delivery_status"] = log.delivery_status
-            record_dict["parent_response"] = log.parent_response
+            record_dict["parent_response"] = map_response_for_display(log.parent_response)
             record_dict["message_id"] = log.message_id
             record_dict["sent_template"] = log.template_name
             record_dict["sent_at"] = log.sent_at.isoformat() if log.sent_at else None
@@ -2453,6 +2462,7 @@ async def get_records_list(
             record_dict["delivered_at"] = None
             record_dict["read_at"] = None
             record_dict["responded_at"] = None
+        record_dict["parent_response"] = map_response_for_display(record_dict.get("parent_response"))
         records_list.append(record_dict)
     
     return {
@@ -2668,7 +2678,8 @@ async def export_records_to_excel(
     data = []
     for r, log in rows:
         d_status = log.delivery_status if log else "Unsent"
-        p_resp = log.parent_response if log else "No Response"
+        raw_p_resp = log.parent_response if log else r.parent_response
+        p_resp = map_response_for_display(raw_p_resp)
         s_tmpl = log.template_name if log else selected_template
         data.append({
             "Student Name": r.student_name,
@@ -2739,6 +2750,7 @@ async def get_recent_chats(
     for rec, msg in rows:
         rec_dict = rec.to_dict()
         rec_dict["unresolved_notes_count"] = unresolved_counts.get(rec.id, 0)
+        rec_dict["parent_response"] = map_response_for_display(rec_dict.get("parent_response"))
         recent_chats.append({
             "record": rec_dict,
             "last_message": msg.to_dict()

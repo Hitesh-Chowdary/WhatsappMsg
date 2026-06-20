@@ -2215,7 +2215,6 @@ function App() {
                 >
                   <option value="all">All Tags</option>
                   <option value="none">No Tag</option>
-                  <option value="Contacted">Contacted</option>
                   <option value="Interested">Interested</option>
                   <option value="Not Interested">Not Interested</option>
                 </select>
