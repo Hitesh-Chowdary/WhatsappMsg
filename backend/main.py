@@ -2469,6 +2469,7 @@ async def add_record_note(
     )
     db.add(note)
     await db.commit()
+    await db.refresh(note)
     
     return {
         "status": "success",
@@ -2686,8 +2687,13 @@ async def get_chat_history(
     # Find the last message sent by the parent
     last_parent_msg = next((msg for msg in reversed(messages) if msg.sender == "parent"), None)
     if last_parent_msg:
-        now_utc = datetime.utcnow()
-        time_diff = now_utc - last_parent_msg.created_at
+        msg_created = last_parent_msg.created_at
+        if msg_created.tzinfo is not None:
+            from datetime import timezone
+            now_utc = datetime.now(timezone.utc)
+        else:
+            now_utc = datetime.utcnow()
+        time_diff = now_utc - msg_created
         diff_seconds = time_diff.total_seconds()
         if diff_seconds < 86400: # 24 hours
             session_active = True
@@ -2884,6 +2890,7 @@ async def add_or_update_auto_reply_rule(
         db.add(rule)
         
     await db.commit()
+    await db.refresh(rule)
     return {"status": "success", "rule": rule.to_dict()}
 
 @app.delete("/api/v1/chat/rules/{rule_id}")
@@ -2937,6 +2944,7 @@ async def save_bot_flow(
         db.add(flow)
         
     await db.commit()
+    await db.refresh(flow)
     return {"status": "success", "flow": flow.to_dict()}
 
 @app.delete("/api/v1/bot/flows/{flow_id}")
