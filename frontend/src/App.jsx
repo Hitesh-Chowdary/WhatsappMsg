@@ -2765,7 +2765,7 @@ function App() {
                                 style={{ flexGrow: 1, padding: '0.5rem', fontSize: '0.85rem', height: '38px', backgroundPosition: 'right 0.65rem center' }}
                               >
                                 <option value="">-- Select Template --</option>
-                                {templatesList.filter(t => t.is_active).map(t => (
+                                {templatesList.map(t => (
                                   <option key={t.id} value={t.template_name}>{t.template_name}</option>
                                 ))}
                               </select>
@@ -2818,7 +2818,7 @@ function App() {
                                 style={{ flexGrow: 1, padding: '0.25rem 0.5rem', fontSize: '0.85rem', height: '32px', backgroundPosition: 'right 0.65rem center' }}
                               >
                                 <option value="">-- Select Template --</option>
-                                {templatesList.filter(t => t.is_active).map(t => (
+                                {templatesList.map(t => (
                                   <option key={t.id} value={t.template_name}>{t.template_name}</option>
                                 ))}
                               </select>

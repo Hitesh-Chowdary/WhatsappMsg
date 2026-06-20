@@ -1777,6 +1777,12 @@ async def handle_incoming_text_reply(
     latest_log = log_res.scalars().first()
     
     # 3. Check for matching response
+    # If a counselor has already taken over the chat, do NOT trigger auto-replies
+    if record.parent_response in ["Counselor Replied", "Counselor Needed"]:
+        logger.info(f"Chat for record {record.id} is in human counselor mode. Bypassing auto-reply.")
+        await db.commit()
+        return {"status": "success", "record_id": record.id}
+        
     response_data = await get_bot_response(message_text, db)
     
     # Check if incoming message is a standard greeting
