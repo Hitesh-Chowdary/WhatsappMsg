@@ -2056,7 +2056,7 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                             )
                         
                         # Process text message: resolving candidate, logging message, and running chatbot
-                        if sender_phone:
+                        elif sender_phone:
                             await handle_incoming_text_reply(
                                 from_phone=sender_phone,
                                 message_text=button_text,
@@ -2093,53 +2093,6 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                             message_id=payload_obj.message_id
                         )
                         db.add(chat_msg)
-                        
-                        # Trigger chatbot auto-reply for simulated quick replies too
-                        # Runs handle_incoming_text_reply to mock response flow
-                        rec_stmt = select(Record).where(Record.id == log.record_id)
-                        rec_res = await db.execute(rec_stmt)
-                        rec = rec_res.scalars().first()
-                        if rec:
-                            # Run async trigger without duplicating parent message
-                            button_text = payload_obj.button_text or "Interested"
-                            response_data = await get_bot_response(button_text, db)
-                            if response_data:
-                                reply_text = response_data["reply_text"]
-                                buttons = response_data.get("buttons", [])
-                                source_keyword = response_data["source_keyword"]
-                                
-                                import uuid
-                                whatsapp_client = get_whatsapp_client()
-                                if buttons:
-                                    response = await whatsapp_client.send_interactive_message(
-                                        to_phone=rec.phone_number,
-                                        message_text=reply_text,
-                                        buttons=buttons
-                                    )
-                                else:
-                                    response = await whatsapp_client.send_free_form_message(
-                                        to_phone=rec.phone_number,
-                                        message_text=reply_text
-                                    )
-                                auto_chat_msg = ChatMessage(
-                                    record_id=rec.id,
-                                    sender="system",
-                                    message_text=reply_text,
-                                    message_id=response.get("message_id") if response.get("status") == "success" else f"auto_fail_{uuid.uuid4().hex[:12]}"
-                                )
-                                db.add(auto_chat_msg)
-                                rec.parent_response = normalize_parent_response(source_keyword)
-                                rec.responded_at = datetime.utcnow()
-                                
-                                # Auto-tag based on parent response
-                                if rec.parent_response == "Interested":
-                                    rec.pipeline_tag = "Interested"
-                                elif rec.parent_response == "Not Interested":
-                                    rec.pipeline_tag = "Not Interested"
-                                    
-                                log.parent_response = normalize_parent_response(source_keyword)
-                                log.responded_at = rec.responded_at
-                                log.delivery_status = "Read"
                 
                 return await process_webhook_event(
                     event=payload_obj.event,

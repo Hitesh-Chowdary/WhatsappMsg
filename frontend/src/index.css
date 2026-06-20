@@ -697,7 +697,7 @@ body {
 .badge-tag-not-interested { background-color: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
 
 /* Quick Action Buttons in Live Chat Header */
-.btn-tag-contacted {
+.btn-tag-interested {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -705,19 +705,19 @@ body {
     padding: 0.25rem 0.65rem;
     height: 30px;
     border-radius: 6px;
-    border: 1px solid #bae6fd;
-    background-color: #e0f2fe;
-    color: #0369a1;
+    border: 1px solid #fde68a;
+    background-color: #fef3c7;
+    color: #b45309;
     font-weight: 600;
     font-size: 0.75rem;
     cursor: pointer;
     transition: all 0.2s ease;
 }
-.btn-tag-contacted:hover {
-    background-color: #bae6fd;
-    color: #0369a1;
+.btn-tag-interested:hover {
+    background-color: #fde68a;
+    color: #b45309;
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(3, 105, 161, 0.1);
+    box-shadow: 0 2px 4px rgba(180, 83, 9, 0.1);
 }
 .btn-tag-not-interested {
     display: inline-flex;
