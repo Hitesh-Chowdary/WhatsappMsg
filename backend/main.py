@@ -154,13 +154,6 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 db.add(log_obj)
 
             try:
-                # Compile template variables dynamically
-                msg_body = template_text
-                msg_body = msg_body.replace("[Parent Name]", record.parent_name)
-                msg_body = msg_body.replace("[Student Name]", record.student_name)
-                msg_body = msg_body.replace("[Selected Branch]", record.selected_branch)
-                msg_body = msg_body.replace("[Phone Number]", record.phone_number)
-
                 # Merge spreadsheet custom fields with default fallback mapping
                 record_vars = record.variables or {}
                 fallback_vars = {
@@ -173,6 +166,9 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     "status": record.selected_branch,
                 }
                 merged_vars = {**fallback_vars, **record_vars}
+
+                # Compile template variables dynamically
+                msg_body = resolve_template_text(template_text, record, merged_vars)
 
                 response = await whatsapp_client.send_message(
                     to_phone=record.phone_number,
@@ -291,13 +287,6 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 db.add(log_obj)
 
             try:
-                # Compile template variables dynamically
-                msg_body = template_text
-                msg_body = msg_body.replace("[Parent Name]", record.parent_name)
-                msg_body = msg_body.replace("[Student Name]", record.student_name)
-                msg_body = msg_body.replace("[Selected Branch]", record.selected_branch)
-                msg_body = msg_body.replace("[Phone Number]", record.phone_number)
-
                 # Merge spreadsheet custom fields with default fallback mapping
                 record_vars = record.variables or {}
                 fallback_vars = {
@@ -310,6 +299,9 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     "status": record.selected_branch,
                 }
                 merged_vars = {**fallback_vars, **record_vars}
+
+                # Compile template variables dynamically
+                msg_body = resolve_template_text(template_text, record, merged_vars)
 
                 response = await whatsapp_client.send_message(
                     to_phone=record.phone_number,
@@ -1349,12 +1341,21 @@ async def send_single_message(
     template_language = template_obj.language if template_obj else "en_US"
     variable_names = template_obj.variable_names if template_obj else ""
 
+    # Merge spreadsheet custom fields with default fallback mapping
+    record_vars = record.variables or {}
+    fallback_vars = {
+        "student_name": record.student_name,
+        "parent_name": record.parent_name,
+        "selected_branch": record.selected_branch,
+        "student": record.student_name,
+        "parent": record.parent_name,
+        "branch": record.selected_branch,
+        "status": record.selected_branch,
+    }
+    merged_vars = {**fallback_vars, **record_vars}
+
     # Compile message text
-    msg_body = template_text
-    msg_body = msg_body.replace("[Parent Name]", record.parent_name)
-    msg_body = msg_body.replace("[Student Name]", record.student_name)
-    msg_body = msg_body.replace("[Selected Branch]", record.selected_branch)
-    msg_body = msg_body.replace("[Phone Number]", record.phone_number)
+    msg_body = resolve_template_text(template_text, record, merged_vars)
 
     # Find or create CampaignLog for single dispatch
     log_stmt = select(CampaignLog).where(
@@ -1376,19 +1377,6 @@ async def send_single_message(
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
     try:
-        # Merge spreadsheet custom fields with default fallback mapping
-        record_vars = record.variables or {}
-        fallback_vars = {
-            "student_name": record.student_name,
-            "parent_name": record.parent_name,
-            "selected_branch": record.selected_branch,
-            "student": record.student_name,
-            "parent": record.parent_name,
-            "branch": record.selected_branch,
-            "status": record.selected_branch,
-        }
-        merged_vars = {**fallback_vars, **record_vars}
-
         response = await client.send_message(
             to_phone=record.phone_number,
             message_body=msg_body,
@@ -1726,6 +1714,44 @@ async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict
         }
         
     return None
+
+def resolve_template_text(template_text: str, record, merged_vars: dict) -> str:
+    msg_body = template_text
+    
+    # 1. Replace bracket placeholders [Parent Name]
+    msg_body = msg_body.replace("[Parent Name]", record.parent_name)
+    msg_body = msg_body.replace("[Student Name]", record.student_name)
+    msg_body = msg_body.replace("[Selected Branch]", record.selected_branch)
+    msg_body = msg_body.replace("[Phone Number]", record.phone_number)
+    
+    # 2. Replace any bracket custom fields like [student_name], [custom_field]
+    import re
+    placeholders = re.findall(r"\[(.*?)\]", msg_body)
+    for p in placeholders:
+        p_lower = p.strip().lower()
+        p_key_normalized = p_lower.replace("_", "").replace(" ", "")
+        if p_lower in merged_vars:
+            msg_body = msg_body.replace(f"[{p}]", str(merged_vars[p_lower]))
+        else:
+            for key, val in merged_vars.items():
+                if key.replace("_", "").replace(" ", "") == p_key_normalized:
+                    msg_body = msg_body.replace(f"[{p}]", str(val))
+                    break
+            
+    # 3. Replace double-brace placeholders like {{student_name}}, {{student}}
+    double_placeholders = re.findall(r"\{\{(.*?)\}\}", msg_body)
+    for dp in double_placeholders:
+        dp_lower = dp.strip().lower()
+        dp_key_normalized = dp_lower.replace("_", "").replace(" ", "")
+        if dp_lower in merged_vars:
+            msg_body = msg_body.replace(f"{{{{{dp}}}}}", str(merged_vars[dp_lower]))
+        else:
+            for key, val in merged_vars.items():
+                if key.replace("_", "").replace(" ", "") == dp_key_normalized:
+                    msg_body = msg_body.replace(f"{{{{{dp}}}}}", str(val))
+                    break
+                    
+    return msg_body
 
 def normalize_parent_response(source_keyword: str) -> str:
     if not source_keyword:
@@ -2853,19 +2879,7 @@ async def send_manual_chat_template(
     }
     merged_vars = {**fallback_vars, **record_vars}
 
-    # Replace bracket placeholders with merged variables
-    import re
-    placeholders = re.findall(r"\[(.*?)\]", msg_body)
-    for p in placeholders:
-        p_lower = p.strip().lower()
-        p_key_normalized = p_lower.replace("_", "").replace(" ", "")
-        if p_lower in merged_vars:
-            msg_body = msg_body.replace(f"[{p}]", str(merged_vars[p_lower]))
-        else:
-            for key, val in merged_vars.items():
-                if key.replace("_", "").replace(" ", "") == p_key_normalized:
-                    msg_body = msg_body.replace(f"[{p}]", str(val))
-                    break
+    msg_body = resolve_template_text(msg_body, record, merged_vars)
 
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)

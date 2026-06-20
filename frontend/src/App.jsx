@@ -2139,12 +2139,11 @@ function App() {
                 </select>
               </div>
 
-              <div className={`filter-group ${dispatchFilter !== 'sent' ? 'disabled' : ''}`}>
+              <div className="filter-group">
                 <span className="filter-label">2. Delivery</span>
                 <select 
                   value={deliveryFilter} 
                   onChange={(e) => handleDeliveryFilterChange(e.target.value)} 
-                  disabled={dispatchFilter !== 'sent'}
                   className="filter-select"
                 >
                   <option value="all">All Delivery States</option>
@@ -2153,12 +2152,11 @@ function App() {
                 </select>
               </div>
 
-              <div className={`filter-group ${dispatchFilter !== 'sent' || deliveryFilter !== 'delivered' ? 'disabled' : ''}`}>
+              <div className="filter-group">
                 <span className="filter-label">3. Read Status</span>
                 <select 
                   value={readFilter} 
                   onChange={(e) => handleReadFilterChange(e.target.value)} 
-                  disabled={dispatchFilter !== 'sent' || deliveryFilter !== 'delivered'}
                   className="filter-select"
                 >
                   <option value="all">All Read States</option>
@@ -2167,12 +2165,11 @@ function App() {
                 </select>
               </div>
 
-              <div className={`filter-group ${dispatchFilter !== 'sent' || deliveryFilter !== 'delivered' || readFilter !== 'read' ? 'disabled' : ''}`}>
+              <div className="filter-group">
                 <span className="filter-label">4. Response</span>
                 <select 
                   value={responseFilter} 
                   onChange={(e) => setResponseFilter(e.target.value)} 
-                  disabled={dispatchFilter !== 'sent' || deliveryFilter !== 'delivered' || readFilter !== 'read'}
                   className="filter-select"
                 >
                   <option value="all">All Responses</option>
