@@ -2662,15 +2662,15 @@ function App() {
                             {activeChat && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                                 {activeChat.record.parent_response === 'Interested' && 
-                                 activeChat.record.pipeline_tag !== 'Contacted' && 
+                                 activeChat.record.pipeline_tag !== 'Interested' && 
                                  activeChat.record.pipeline_tag !== 'Not Interested' && (
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                     <button 
-                                      onClick={() => handleUpdateTag(activeChat.record.id, 'Contacted')}
-                                      className="btn-tag-contacted"
-                                      title="Mark as Contacted"
+                                      onClick={() => handleUpdateTag(activeChat.record.id, 'Interested')}
+                                      className="btn-tag-interested"
+                                      title="Mark as Interested"
                                     >
-                                      Mark Contacted
+                                      Mark Interested
                                     </button>
                                     <button 
                                       onClick={() => handleUpdateTag(activeChat.record.id, 'Not Interested')}
