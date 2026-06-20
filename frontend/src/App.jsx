@@ -2589,11 +2589,33 @@ function App() {
                   const lastMsgTime = lastMsg ? new Date(lastMsg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
                   
                   const tagVal = chat.record.pipeline_tag;
-                  const isMainTag = ['Contacted', 'Interested', 'Not Interested'].includes(tagVal);
+                  const parentResp = chat.record.parent_response;
+                  
+                  let showTag = false;
                   let tagBadge = '';
-                  if (tagVal === 'Contacted') tagBadge = 'badge-tag-contacted';
-                  if (tagVal === 'Interested') tagBadge = 'badge-tag-interested';
-                  if (tagVal === 'Not Interested') tagBadge = 'badge-tag-not-interested';
+                  let tagText = '';
+                  
+                  if (tagVal === 'Contacted') {
+                    showTag = true;
+                    tagBadge = 'badge-tag-contacted';
+                    tagText = 'Contacted';
+                  } else if (tagVal === 'Interested') {
+                    showTag = true;
+                    tagBadge = 'badge-tag-interested';
+                    tagText = 'Interested';
+                  } else if (tagVal === 'Not Interested') {
+                    showTag = true;
+                    tagBadge = 'badge-tag-not-interested';
+                    tagText = 'Not Interested';
+                  } else if (parentResp === 'Interested') {
+                    showTag = true;
+                    tagBadge = 'badge-interested';
+                    tagText = 'Interested';
+                  } else if (parentResp === 'Not Interested') {
+                    showTag = true;
+                    tagBadge = 'badge-not-interested';
+                    tagText = 'Not Interested';
+                  }
 
                   return (
                     <div 
@@ -2618,8 +2640,8 @@ function App() {
                               <span title={`${chat.record.unresolved_notes_count} pending notes`} style={{ fontSize: '0.85rem' }}>📝</span>
                             )}
                           </span>
-                          {isMainTag && (
-                            <span className={`badge ${tagBadge}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem', fontWeight: '600' }}>{tagVal}</span>
+                          {showTag && (
+                            <span className={`badge ${tagBadge}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem', fontWeight: '600' }}>{tagText}</span>
                           )}
                           <span className="conv-time" style={{ whiteSpace: 'nowrap' }}>{lastMsgTime}</span>
                         </div>

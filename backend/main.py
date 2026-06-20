@@ -1547,6 +1547,7 @@ async def handle_quick_reply_auto_response(
     db: AsyncSession
 ):
     import uuid
+    import re
     # Fetch candidate record
     stmt = select(Record).where(Record.id == record_id)
     res = await db.execute(stmt)
@@ -1555,49 +1556,83 @@ async def handle_quick_reply_auto_response(
         logger.warning(f"Quick reply auto response ignored: record ID {record_id} not found.")
         return
         
-    # Search for matching Auto-Reply rule
-    rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
-    rules_res = await db.execute(rules_stmt)
-    all_rules = rules_res.scalars().all()
+    # Check active BotFlow first
+    bot_resp = await get_bot_response(button_text, db)
     
-    matched_rule = None
-    for rule in all_rules:
-        if rule.keyword.lower().strip() == button_text.lower().strip():
-            matched_rule = rule
-            break
-            
-    # Default fallbacks if no custom rule configured
     reply_text = None
-    if matched_rule:
-        reply_text = matched_rule.reply_text
+    buttons = []
+    
+    if bot_resp:
+        reply_text = bot_resp["reply_text"]
+        buttons = bot_resp.get("buttons", [])
     else:
-        if button_text.lower().strip() == "interested":
-            reply_text = (
-                "Thank you, [Parent Name]! We have recorded your interest for [Selected Branch]. "
-                "Our admissions counselor will call you shortly to discuss seat allocation, "
-                "scholarship options, and hostel facilities. 📞"
-            )
-        elif button_text.lower().strip() == "not interested":
-            reply_text = (
-                "We understand, [Parent Name]. We have updated your preference in our portal and "
-                "will not send further automated updates. If you change your mind, feel free to contact "
-                "us anytime. Thank you!"
-            )
-            
+        # Search for matching Auto-Reply rule
+        rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
+        rules_res = await db.execute(rules_stmt)
+        all_rules = rules_res.scalars().all()
+        
+        matched_rule = None
+        for rule in all_rules:
+            if rule.keyword.lower().strip() == button_text.lower().strip():
+                matched_rule = rule
+                break
+                
+        if matched_rule:
+            reply_text = matched_rule.reply_text
+        else:
+            # Default fallbacks if no custom rule configured
+            if button_text.lower().strip() == "interested":
+                reply_text = (
+                    "Thank you, [Parent Name]! We have recorded your interest for [Selected Branch]. "
+                    "Our admissions counselor will call you shortly to discuss seat allocation, "
+                    "scholarship options, and hostel facilities. 📞"
+                )
+            elif button_text.lower().strip() == "not interested":
+                reply_text = (
+                    "We understand, [Parent Name]. We have updated your preference in our portal and "
+                    "will not send further automated updates. If you change your mind, feel free to contact "
+                    "us anytime. Thank you!"
+                )
+                
     if reply_text:
-        # Compile dynamic variables if present in the reply text
+        # Compile dynamic placeholders from database record fields
         reply_text = reply_text.replace("[Parent Name]", record.parent_name or "Parent")
         reply_text = reply_text.replace("[Student Name]", record.student_name or "Student")
         reply_text = reply_text.replace("[Selected Branch]", record.selected_branch or "Selected Branch")
         reply_text = reply_text.replace("[Phone Number]", record.phone_number or "")
+        reply_text = reply_text.replace("[Application ID]", str(record.id) or "")
         
-        # Send message via WhatsApp
+        # Replace literal "\n" strings with actual newline characters
+        reply_text = reply_text.replace("\\n", "\n")
+        
+        # Replace custom variables parsed from Excel spreadsheet columns
+        placeholders = re.findall(r"\[(.*?)\]", reply_text)
+        for p in placeholders:
+            p_lower = p.strip().lower()
+            p_key_normalized = p_lower.replace("_", "").replace(" ", "")
+            if record.variables:
+                if p_lower in record.variables:
+                    reply_text = reply_text.replace(f"[{p}]", record.variables[p_lower])
+                else:
+                    for key, val in record.variables.items():
+                        if key.replace("_", "").replace(" ", "") == p_key_normalized:
+                            reply_text = reply_text.replace(f"[{p}]", val)
+                            break
+        
+        # Send message via WhatsApp (supporting interactive buttons!)
         whatsapp_client = get_whatsapp_client()
-        response = await whatsapp_client.send_free_form_message(
-            to_phone=record.phone_number,
-            message_text=reply_text
-        )
-        
+        if buttons:
+            response = await whatsapp_client.send_interactive_message(
+                to_phone=record.phone_number,
+                message_text=reply_text,
+                buttons=buttons
+            )
+        else:
+            response = await whatsapp_client.send_free_form_message(
+                to_phone=record.phone_number,
+                message_text=reply_text
+            )
+            
         # Save auto-reply in chat history as system sender
         auto_msg_id = response.get("message_id") if response.get("status") == "success" else f"auto_fail_{uuid.uuid4().hex[:12]}"
         auto_chat_msg = ChatMessage(
