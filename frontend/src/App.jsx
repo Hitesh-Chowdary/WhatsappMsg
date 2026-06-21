@@ -183,6 +183,7 @@ function App() {
   const [addingNote, setAddingNote] = useState(false);
   const [chatSession, setChatSession] = useState({ active: false, expires_at: null, time_remaining_seconds: 0 });
   const [selectedChatTemplate, setSelectedChatTemplate] = useState('');
+  const [forceFreeForm, setForceFreeForm] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [reminders, setReminders] = useState([]);
 
