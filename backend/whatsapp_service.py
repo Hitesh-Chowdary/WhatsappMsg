@@ -483,7 +483,7 @@ class MetaWhatsAppClient(WhatsAppClient):
                             "type": "reply",
                             "reply": {
                                 "id": f"btn_{i}",
-                                "title": btn_text
+                                "title": btn_text[:20]
                             }
                         }
                         for i, btn_text in enumerate(buttons[:3])
