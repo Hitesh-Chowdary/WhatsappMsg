@@ -194,7 +194,7 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     chat_msg = ChatMessage(
                         record_id=record.id,
                         sender="system",
-                        message_text=msg_body,
+                        message_text=msg_body or f"Template Outreach: {template_name}",
                         media_url=media_url if media_type != "none" else None,
                         message_id=response.get("message_id")
                     )
@@ -327,7 +327,7 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     chat_msg = ChatMessage(
                         record_id=record.id,
                         sender="system",
-                        message_text=msg_body,
+                        message_text=msg_body or f"Template Outreach: {template_name}",
                         media_url=media_url if media_type != "none" else None,
                         message_id=response.get("message_id")
                     )
@@ -1401,7 +1401,7 @@ async def send_single_message(
             chat_msg = ChatMessage(
                 record_id=record.id,
                 sender="system",
-                message_text=msg_body,
+                message_text=msg_body or f"Template Outreach: {template_name}",
                 media_url=media_url if media_type != "none" else None,
                 message_id=response.get("message_id")
             )
@@ -1768,7 +1768,9 @@ async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict
         
     return None
 
-def resolve_template_text(template_text: str, record, merged_vars: dict) -> str:
+def resolve_template_text(template_text: Optional[str], record, merged_vars: dict) -> str:
+    if not template_text:
+        return ""
     msg_body = template_text
     
     # 1. Replace bracket placeholders [Parent Name]
@@ -1803,6 +1805,8 @@ def resolve_template_text(template_text: str, record, merged_vars: dict) -> str:
                 if key.replace("_", "").replace(" ", "") == dp_key_normalized:
                     msg_body = msg_body.replace(f"{{{{{dp}}}}}", str(val))
                     break
+                    
+    return msg_body
                     
 def detect_and_save_call_request(record, text: str):
     if not text:
