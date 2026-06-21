@@ -1849,7 +1849,8 @@ async def handle_incoming_text_reply(
     from_phone: str,
     message_text: str,
     message_id: str,
-    db: AsyncSession
+    db: AsyncSession,
+    is_button_click: bool = False
 ) -> Dict[str, Any]:
     import uuid
     import re
@@ -1884,10 +1885,11 @@ async def handle_incoming_text_reply(
     )
     db.add(chat_msg)
     
-    # Increment unread count in variables
-    current_vars = record.variables or {}
-    unread = current_vars.get("unread_count", 0)
-    record.variables = {**current_vars, "unread_count": unread + 1}
+    # Increment unread count ONLY for real typed messages, NOT button/interactive clicks
+    if not is_button_click:
+        current_vars = record.variables or {}
+        unread = current_vars.get("unread_count", 0)
+        record.variables = {**current_vars, "unread_count": unread + 1}
     
     # Fetch latest CampaignLog for mirror updates
     log_stmt = select(CampaignLog).where(CampaignLog.record_id == record.id).order_by(CampaignLog.id.desc()).limit(1)
@@ -2144,13 +2146,24 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                                 db=db
                             )
                         
-                        # Process text message: resolving candidate, logging message, and running chatbot
-                        elif sender_phone:
+                        # Process button/interactive click: bot flow, but NOT a real typed message
+                        elif sender_phone and msg_type in ["button", "interactive"]:
                             await handle_incoming_text_reply(
                                 from_phone=sender_phone,
                                 message_text=button_text,
                                 message_id=msg_id,
-                                db=db
+                                db=db,
+                                is_button_click=True
+                            )
+                        
+                        # Process real typed text message — triggers unread notification
+                        elif sender_phone and msg_type == "text":
+                            await handle_incoming_text_reply(
+                                from_phone=sender_phone,
+                                message_text=button_text,
+                                message_id=msg_id,
+                                db=db,
+                                is_button_click=False
                             )
         return {"status": "processed"}
         
