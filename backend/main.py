@@ -87,6 +87,20 @@ class BotFlowPayload(BaseModel):
     flow_data: dict
     is_active: Optional[bool] = True
 
+class ContactCreatePayload(BaseModel):
+    student_name: str
+    parent_name: str
+    phone_number: str
+    selected_branch: str
+    pipeline_tag: Optional[str] = "Lead"
+
+class ContactUpdatePayload(BaseModel):
+    student_name: Optional[str] = None
+    parent_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    selected_branch: Optional[str] = None
+    pipeline_tag: Optional[str] = None
+
 # Background task for bulk message broadcasting
 async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppClient, base_url: Optional[str] = None):
     logger.info("Starting background campaign broadcast...")
@@ -104,7 +118,7 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
             
         template_name = template_obj.template_name if template_obj else "admission_outreach"
         template_text = template_obj.template_text if template_obj else (
-            "Dear [Parent Name], greetings from College Admissions. Your child [Student Name] "
+            "Dear [Parent Name], greetings from Student Outreach. Your child [Student Name] "
             "has been selected for the [Selected Branch] branch. To block the seat, please pay the "
             "₹50,000 advance fee. Click below to confirm interest: [Interested] / [Not Interested]"
         )
@@ -246,7 +260,7 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
             
         template_name = template_obj.template_name if template_obj else "admission_outreach"
         template_text = template_obj.template_text if template_obj else (
-            "Dear [Parent Name], greetings from College Admissions. Your child [Student Name] "
+            "Dear [Parent Name], greetings from Student Outreach. Your child [Student Name] "
             "has been selected for the [Selected Branch] branch. To block the seat, please pay the "
             "₹50,000 advance fee. Click below to confirm interest: [Interested] / [Not Interested]"
         )
@@ -829,7 +843,7 @@ async def sync_templates_from_meta(
                 "name": "parent_outreach",
                 "category": "MARKETING",
                 "language": "en",
-                "text": "*_Dr. RVR NRI INSTITUTE OF TECHNOLOGY_*\n\nDear {{parent_name}}, greetings from College Admissions. Your child {{student_name}} has been selected for the {{selected_branch}} branch. To block the seat, please pay the ₹50,000 advance fee. Click below to confirm",
+                "text": "*_Dr. RVR NRI INSTITUTE OF TECHNOLOGY_*\n\nDear {{parent_name}}, greetings from Student Outreach. Your child {{student_name}} has been selected for the {{selected_branch}} branch. To block the seat, please pay the ₹50,000 advance fee. Click below to confirm",
                 "media_type": "image",
                 "media_url": "https://raw.githubusercontent.com/Hitesh-Chowdary/WhatsappMsg/main/frontend/static/media/logo.jpg",
                 "variable_names": "parent_name,student_name,selected_branch"
@@ -992,7 +1006,7 @@ async def add_template_by_name(
                 "name": "parent_outreach",
                 "category": "MARKETING",
                 "language": "en",
-                "text": "*_Dr. RVR NRI INSTITUTE OF TECHNOLOGY_*\n\nDear {{parent_name}}, greetings from College Admissions. Your child {{student_name}} has been selected for the {{selected_branch}} branch. To block the seat, please pay the ₹50,000 advance fee. Click below to confirm",
+                "text": "*_Dr. RVR NRI INSTITUTE OF TECHNOLOGY_*\n\nDear {{parent_name}}, greetings from Student Outreach. Your child {{student_name}} has been selected for the {{selected_branch}} branch. To block the seat, please pay the ₹50,000 advance fee. Click below to confirm",
                 "media_type": "image",
                 "media_url": "https://raw.githubusercontent.com/Hitesh-Chowdary/WhatsappMsg/main/frontend/static/media/logo.jpg",
                 "variable_names": "parent_name,student_name,selected_branch"
@@ -1329,7 +1343,7 @@ async def send_single_message(
         
     template_name = template_obj.template_name if template_obj else "admission_outreach"
     template_text = template_obj.template_text if template_obj else (
-        "Dear [Parent Name], greetings from College Admissions. Your child [Student Name] "
+        "Dear [Parent Name], greetings from Student Outreach. Your child [Student Name] "
         "has been selected for the [Selected Branch] branch. To block the seat, please pay the "
         "₹50,000 advance fee. Click below to confirm interest: [Interested] / [Not Interested]"
     )
@@ -1596,7 +1610,7 @@ async def handle_quick_reply_auto_response(
             if button_text.lower().strip() == "interested":
                 reply_text = (
                     "Thank you, [Parent Name]! We have recorded your interest for [Selected Branch]. "
-                    "Our admissions counselor will call you shortly to discuss seat allocation, "
+                    "Our outreach counselor will call you shortly to discuss seat allocation, "
                     "scholarship options, and hostel facilities. 📞"
                 )
             elif button_text.lower().strip() == "not interested":
@@ -1880,7 +1894,7 @@ async def handle_incoming_text_reply(
     chat_msg = ChatMessage(
         record_id=record.id,
         sender="parent",
-        message_text=message_text,
+        message_text=message_text or "",
         message_id=message_id
     )
     db.add(chat_msg)
@@ -1956,7 +1970,7 @@ async def handle_incoming_text_reply(
         if last_system_msg and last_system_msg.message_text.strip() == fallback_text.strip():
             # We already sent the fallback! Handover to counselor instead
             handover_text = (
-                "I want to make sure you get the right information. I've notified our admissions team, "
+                "I want to make sure you get the right information. I've notified our outreach team, "
                 "and a counselor will assist you here shortly. Thank you for your patience!"
             )
             
@@ -3211,3 +3225,314 @@ async def delete_bot_flow(
     await db.execute(stmt)
     await db.commit()
     return {"status": "success", "message": f"Flow ID {flow_id} deleted."}
+
+# Contacts Management APIs
+@app.get("/api/v1/contacts")
+async def get_contacts_list(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+    search: Optional[str] = None,
+    branch: Optional[str] = None,
+    pipeline_tag: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves paginated, filtered contact list for the contacts directory."""
+    stmt = select(Record)
+    count_stmt = select(func.count()).select_from(Record)
+    
+    if search:
+        search_pattern = f"%{search}%"
+        filter_cond = or_(
+            Record.student_name.ilike(search_pattern),
+            Record.parent_name.ilike(search_pattern),
+            Record.phone_number.ilike(search_pattern),
+            Record.selected_branch.ilike(search_pattern)
+        )
+        stmt = stmt.where(filter_cond)
+        count_stmt = count_stmt.where(filter_cond)
+        
+    if branch and branch.lower() != "all":
+        stmt = stmt.where(Record.selected_branch == branch)
+        count_stmt = count_stmt.where(Record.selected_branch == branch)
+        
+    if pipeline_tag and pipeline_tag.lower() != "all":
+        stmt = stmt.where(Record.pipeline_tag == pipeline_tag)
+        count_stmt = count_stmt.where(Record.pipeline_tag == pipeline_tag)
+        
+    # Order by newest contacts first
+    stmt = stmt.order_by(Record.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    
+    res = await db.execute(stmt)
+    contacts = res.scalars().all()
+    
+    count_res = await db.execute(count_stmt)
+    total_count = count_res.scalar() or 0
+    
+    return {
+        "contacts": [c.to_dict() for c in contacts],
+        "total": total_count,
+        "page": page,
+        "limit": limit
+    }
+
+@app.post("/api/v1/contacts")
+async def create_contact(
+    payload: ContactCreatePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Manually creates a new contact entry."""
+    raw_phone = payload.phone_number.strip()
+    cleaned_phone = "".join(filter(str.isdigit, raw_phone))
+    if len(cleaned_phone) == 10:
+        cleaned_phone = "91" + cleaned_phone
+    elif len(cleaned_phone) < 10:
+        raise HTTPException(status_code=400, detail="Invalid phone number. Must be at least 10 digits.")
+        
+    # Check duplicate
+    stmt = select(Record).where(Record.phone_number == cleaned_phone)
+    res = await db.execute(stmt)
+    existing = res.scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"A contact with phone number {cleaned_phone} already exists."
+        )
+        
+    contact = Record(
+        student_name=payload.student_name.strip(),
+        parent_name=payload.parent_name.strip(),
+        phone_number=cleaned_phone,
+        selected_branch=payload.selected_branch.strip(),
+        pipeline_tag=payload.pipeline_tag or "Lead",
+        campaign_status="Pending",
+        delivery_status="Unsent",
+        parent_response="No Response",
+        variables={
+            "student_name": payload.student_name.strip(),
+            "parent_name": payload.parent_name.strip(),
+            "selected_branch": payload.selected_branch.strip()
+        }
+    )
+    db.add(contact)
+    await db.commit()
+    await db.refresh(contact)
+    return {"status": "success", "contact": contact.to_dict()}
+
+@app.put("/api/v1/contacts/{id}")
+async def update_contact(
+    id: int,
+    payload: ContactUpdatePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Updates an existing contact's details."""
+    stmt = select(Record).where(Record.id == id)
+    res = await db.execute(stmt)
+    contact = res.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found.")
+        
+    if payload.student_name is not None:
+        contact.student_name = payload.student_name.strip()
+    if payload.parent_name is not None:
+        contact.parent_name = payload.parent_name.strip()
+    if payload.selected_branch is not None:
+        contact.selected_branch = payload.selected_branch.strip()
+    if payload.pipeline_tag is not None:
+        contact.pipeline_tag = payload.pipeline_tag
+        
+    if payload.phone_number is not None:
+        raw_phone = payload.phone_number.strip()
+        cleaned_phone = "".join(filter(str.isdigit, raw_phone))
+        if len(cleaned_phone) == 10:
+            cleaned_phone = "91" + cleaned_phone
+        elif len(cleaned_phone) < 10:
+            raise HTTPException(status_code=400, detail="Invalid phone number. Must be at least 10 digits.")
+            
+        dup_stmt = select(Record).where(Record.phone_number == cleaned_phone, Record.id != id)
+        dup_res = await db.execute(dup_stmt)
+        dup = dup_res.scalar_one_or_none()
+        if dup:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Another contact with phone number {cleaned_phone} already exists."
+            )
+        contact.phone_number = cleaned_phone
+        
+    # Update variables values too
+    vars_dict = dict(contact.variables or {})
+    vars_dict.update({
+        "student_name": contact.student_name,
+        "parent_name": contact.parent_name,
+        "selected_branch": contact.selected_branch
+    })
+    contact.variables = vars_dict
+    
+    await db.commit()
+    await db.refresh(contact)
+    return {"status": "success", "contact": contact.to_dict()}
+
+@app.delete("/api/v1/contacts/{id}")
+async def delete_contact(
+    id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Deletes a contact by ID (cascades chat histories & logs)."""
+    from sqlalchemy import delete
+    stmt = select(Record).where(Record.id == id)
+    res = await db.execute(stmt)
+    contact = res.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found.")
+        
+    await db.execute(delete(Record).where(Record.id == id))
+    await db.commit()
+    return {"status": "success", "message": f"Contact ID {id} deleted successfully."}
+
+@app.post("/api/v1/contacts/upload")
+async def upload_contacts(
+    file: UploadFile = File(...), 
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Parses Excel/CSV file, normalizes phone numbers, and inserts/updates records WITHOUT resetting campaign log histories."""
+    logger.info(f"upload_contacts: started parsing file '{file.filename}'...")
+    if not (file.filename.endswith(".xlsx") or file.filename.endswith(".csv")):
+        raise HTTPException(
+            status_code=400, 
+            detail="Unsupported file format. Please upload a valid Excel (.xlsx) or CSV (.csv) file."
+        )
+        
+    try:
+        contents = await file.read()
+        logger.info(f"upload_contacts: file read complete, size={len(contents)} bytes")
+        if file.filename.endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(contents))
+        else:
+            df = pd.read_excel(io.BytesIO(contents))
+        logger.info(f"upload_contacts: df parsing complete, shape={df.shape}")
+    except Exception as e:
+        logger.error(f"Failed to read file: {e}")
+        raise HTTPException(status_code=400, detail=f"File parse error: {str(e)}")
+
+    columns = [str(c).strip().lower() for c in df.columns]
+    
+    student_col = None
+    parent_col = None
+    branch_col = None
+    phone_col = None
+    
+    for i, col in enumerate(columns):
+        if col in ["student name", "student_name", "student", "candidate name", "candidate"]:
+            student_col = df.columns[i]
+        elif col in ["parent name", "parent_name", "father name", "mother name", "parent", "guardian name"]:
+            parent_col = df.columns[i]
+        elif col in ["selected branch", "selected_branch", "branch", "course", "selected course"]:
+            branch_col = df.columns[i]
+        elif col in ["phone number", "phone_number", "phone", "mobile", "mobile number", "contact", "phone_no"]:
+            phone_col = df.columns[i]
+
+    if not phone_col:
+        logger.warning("upload_contacts: Phone Number column is missing")
+        raise HTTPException(
+            status_code=400,
+            detail="Phone Number column is missing. Please verify your spreadsheet contains a phone number header."
+        )
+
+    phone_numbers = []
+    records_to_process = []
+    
+    for _, row in df.iterrows():
+        raw_phone = str(row[phone_col]).strip()
+        if not raw_phone or pd.isna(row[phone_col]) or raw_phone.lower() == "nan":
+            continue
+            
+        cleaned_phone = "".join(filter(str.isdigit, raw_phone))
+        
+        if len(cleaned_phone) == 10:
+            cleaned_phone = "91" + cleaned_phone
+        elif len(cleaned_phone) < 10:
+            continue
+            
+        student_name = str(row[student_col]).strip() if student_col and not pd.isna(row[student_col]) else "N/A"
+        parent_name = str(row[parent_col]).strip() if parent_col and not pd.isna(row[parent_col]) else "N/A"
+        branch = str(row[branch_col]).strip() if branch_col and not pd.isna(row[branch_col]) else "N/A"
+        
+        if student_name.lower() == "nan": student_name = "N/A"
+        if parent_name.lower() == "nan": parent_name = "N/A"
+        if branch.lower() == "nan": branch = "N/A"
+        
+        row_variables = {}
+        for col in df.columns:
+            val = row[col]
+            if not pd.isna(val):
+                cleaned_val = str(val).strip()
+                row_variables[str(col).strip().lower()] = cleaned_val
+                norm_col = str(col).strip().lower().replace("_", "").replace(" ", "")
+                if norm_col in ["studentname", "student", "candidatename", "candidate"]:
+                    row_variables["student_name"] = cleaned_val
+                    row_variables["student"] = cleaned_val
+                elif norm_col in ["parentname", "parent", "fathername", "mothername", "guardianname", "guardian"]:
+                    row_variables["parent_name"] = cleaned_val
+                    row_variables["parent"] = cleaned_val
+                elif norm_col in ["selectedbranch", "branch", "course", "selectedcourse", "status", "admissionstatus"]:
+                    row_variables["selected_branch"] = cleaned_val
+                    row_variables["branch"] = cleaned_val
+                    row_variables["status"] = cleaned_val
+        
+        phone_numbers.append(cleaned_phone)
+        records_to_process.append({
+            "student_name": student_name,
+            "parent_name": parent_name,
+            "selected_branch": branch,
+            "phone_number": cleaned_phone,
+            "variables": row_variables
+        })
+
+    if not records_to_process:
+        logger.warning("upload_contacts: no valid records parsed")
+        raise HTTPException(status_code=400, detail="No valid records parsed from the sheet.")
+
+    logger.info(f"upload_contacts: querying {len(phone_numbers)} phone numbers from db...")
+    stmt = select(Record).where(Record.phone_number.in_(phone_numbers))
+    result = await db.execute(stmt)
+    existing_records = {r.phone_number: r for r in result.scalars().all()}
+    
+    added_count = 0
+    updated_count = 0
+    
+    for record_data in records_to_process:
+        phone = record_data["phone_number"]
+        if phone in existing_records:
+            # Upsert contact info without resetting campaign statuses
+            rec = existing_records[phone]
+            rec.student_name = record_data["student_name"]
+            rec.parent_name = record_data["parent_name"]
+            rec.selected_branch = record_data["selected_branch"]
+            rec.variables = {**(rec.variables or {}), **record_data["variables"]}
+            updated_count += 1
+        else:
+            rec = Record(
+                student_name=record_data["student_name"],
+                parent_name=record_data["parent_name"],
+                selected_branch=record_data["selected_branch"],
+                phone_number=phone,
+                variables=record_data["variables"],
+                campaign_status="Pending",
+                delivery_status="Unsent",
+                parent_response="No Response"
+            )
+            db.add(rec)
+            added_count += 1
+
+    await db.commit()
+    return {
+        "status": "success",
+        "message": f"Excel parsed successfully. Added {added_count} new contacts, updated {updated_count} existing contacts.",
+        "columns": df.columns.tolist(),
+        "added": added_count,
+        "updated": updated_count
+    }

@@ -485,7 +485,7 @@ const computeAutoLayout = (nodesList) => {
   return [...updatedTriggers, ...updatedMessages];
 };
 
-export default function FlowBuilder({ authFetch, API_BASE }) {
+export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNode, setSelectedNode] = useState(null);
@@ -749,6 +749,16 @@ export default function FlowBuilder({ authFetch, API_BASE }) {
       return () => clearTimeout(timer);
     }
   }, [loadCounter, reactFlowInstance]);
+
+  // Fit view when tab becomes active and flow instance is available
+  useEffect(() => {
+    if (activeView === 'bot-builder' && reactFlowInstance) {
+      const timer = setTimeout(() => {
+        reactFlowInstance.fitView({ padding: 0.2, duration: 400 });
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [activeView, reactFlowInstance]);
 
   const centerView = useCallback(() => {
     if (reactFlowInstance) {

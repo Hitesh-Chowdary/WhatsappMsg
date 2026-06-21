@@ -187,6 +187,41 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [reminders, setReminders] = useState([]);
 
+  // Contacts State
+  const [contactsList, setContactsList] = useState([]);
+  const [contactsTotal, setContactsTotal] = useState(0);
+  const [contactsPage, setContactsPage] = useState(1);
+  const [contactsLimit] = useState(50);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactsSearch, setContactsSearch] = useState('');
+  const [contactsBranch, setContactsBranch] = useState('all');
+  const [contactsTag, setContactsTag] = useState('all');
+  
+  // Contacts Modals
+  const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
+  const [isEditContactModalOpen, setIsEditContactModalOpen] = useState(false);
+  const [isImportContactsModalOpen, setIsImportContactsModalOpen] = useState(false);
+  const [contactToEdit, setContactToEdit] = useState(null);
+  
+  // Single Contact Form State
+  const [newStudentName, setNewStudentName] = useState('');
+  const [newParentName, setNewParentName] = useState('');
+  const [newPhoneNumber, setNewPhoneNumber] = useState('');
+  const [newBranch, setNewBranch] = useState('');
+  const [newPipelineTag, setNewPipelineTag] = useState('Lead');
+  
+  // Edit Contact Form State
+  const [editStudentName, setEditStudentName] = useState('');
+  const [editParentName, setEditParentName] = useState('');
+  const [editPhoneNumber, setEditPhoneNumber] = useState('');
+  const [editBranch, setEditBranch] = useState('');
+  const [editPipelineTag, setEditPipelineTag] = useState('Lead');
+
+  // Contact Ingestion State
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
+  const [importStatusText, setImportStatusText] = useState('');
+
   const [secondsLeft, setSecondsLeft] = useState(0);
 
   useEffect(() => {
@@ -680,6 +715,43 @@ function App() {
     setSelectedRecordIds([]);
   }, [dispatchFilter, deliveryFilter, readFilter, responseFilter, branchFilter, templateFilter, pipelineTagFilter, pendingNotesFilter, search, currentPage]);
 
+  // Fetch contacts when filters or activeView changes
+  useEffect(() => {
+    if (!token) return;
+    if (activeView === 'contacts') {
+      fetchContacts(contactsPage);
+    }
+  }, [activeView, contactsPage, contactsBranch, contactsTag, token]);
+
+  // Debounced search for contacts
+  useEffect(() => {
+    if (!token || activeView !== 'contacts') return;
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    
+    searchTimeoutRef.current = setTimeout(() => {
+      setContactsPage(1);
+      fetchContacts(1);
+    }, 300);
+
+    return () => clearTimeout(searchTimeoutRef.current);
+  }, [contactsSearch, token]);
+
+  // Sync contactsBranch and branchFilter states if selected branch is deleted/no longer exists
+  useEffect(() => {
+    if (contactsBranch !== 'all' && !branches.includes(contactsBranch)) {
+      setContactsBranch('all');
+      setContactsPage(1);
+    }
+  }, [branches, contactsBranch]);
+
+  useEffect(() => {
+    if (branchFilter !== 'all' && !branches.includes(branchFilter)) {
+      setBranchFilter('all');
+      setCurrentPage(1);
+    }
+  }, [branches, branchFilter]);
+
+
   // Scroll sandbox logs to bottom
 
 
@@ -775,6 +847,186 @@ function App() {
   };
 
 
+
+  // ----------------------------------------------------
+  // CONTACTS OPERATIONS
+  // ----------------------------------------------------
+  const fetchContacts = async (page = 1) => {
+    if (!token) return;
+    setContactsLoading(true);
+    try {
+      let url = `${API_BASE}/api/v1/contacts?page=${page}&limit=${contactsLimit}`;
+      if (contactsSearch) {
+        url += `&search=${encodeURIComponent(contactsSearch)}`;
+      }
+      if (contactsBranch && contactsBranch !== 'all') {
+        url += `&branch=${encodeURIComponent(contactsBranch)}`;
+      }
+      if (contactsTag && contactsTag !== 'all') {
+        url += `&pipeline_tag=${encodeURIComponent(contactsTag)}`;
+      }
+      
+      const res = await authFetch(url);
+      const data = await res.json();
+      if (res.ok) {
+        setContactsList(data.contacts || []);
+        setContactsTotal(data.total || 0);
+        setContactsPage(data.page || 1);
+      } else {
+        throw new Error(data.detail || "Failed to load contacts.");
+      }
+    } catch (err) {
+      triggerToast(err.message, "error");
+    } finally {
+      setContactsLoading(false);
+    }
+  };
+
+  const handleAddContact = async (e) => {
+    e.preventDefault();
+    if (!newStudentName || !newParentName || !newPhoneNumber || !newBranch) {
+      triggerToast("Please fill all required fields.", "error");
+      return;
+    }
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student_name: newStudentName,
+          parent_name: newParentName,
+          phone_number: newPhoneNumber,
+          selected_branch: newBranch,
+          pipeline_tag: newPipelineTag
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to create contact.");
+      
+      triggerToast("Contact created successfully!", "success");
+      setIsAddContactModalOpen(false);
+      
+      // Reset form fields
+      setNewStudentName('');
+      setNewParentName('');
+      setNewPhoneNumber('');
+      setNewBranch('');
+      setNewPipelineTag('Lead');
+      
+      fetchContacts(1);
+      fetchBranches();
+    } catch (err) {
+      triggerToast(err.message, "error");
+    }
+  };
+
+  const handleEditContact = async (e) => {
+    e.preventDefault();
+    if (!editStudentName || !editParentName || !editPhoneNumber || !editBranch) {
+      triggerToast("Please fill all required fields.", "error");
+      return;
+    }
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/contacts/${contactToEdit.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student_name: editStudentName,
+          parent_name: editParentName,
+          phone_number: editPhoneNumber,
+          selected_branch: editBranch,
+          pipeline_tag: editPipelineTag
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to update contact.");
+      
+      triggerToast("Contact updated successfully!", "success");
+      setIsEditContactModalOpen(false);
+      setContactToEdit(null);
+      fetchContacts(contactsPage);
+      fetchBranches();
+    } catch (err) {
+      triggerToast(err.message, "error");
+    }
+  };
+
+  const handleDeleteContact = async (id) => {
+    setConfirmModal({
+      isOpen: true,
+      title: "Delete Contact",
+      message: "Are you sure you want to delete this contact? This will delete all chat histories, messages, and campaign logs associated with this phone number permanently.",
+      onConfirm: async () => {
+        closeConfirmModal();
+        try {
+          const res = await authFetch(`${API_BASE}/api/v1/contacts/${id}`, {
+            method: 'DELETE'
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to delete contact.");
+          
+          triggerToast("Contact deleted successfully.", "success");
+          
+          // Clear active chat state if the deleted contact was selected
+          if (activeChatRecordId === id) {
+            setActiveChatRecordId(null);
+            setChatHistory([]);
+            setChatNotes([]);
+          }
+          
+          fetchContacts(contactsPage);
+          fetchBranches();
+        } catch (err) {
+          triggerToast(err.message, "error");
+        }
+      }
+    });
+  };
+
+  const handleImportContacts = async (file) => {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    setImporting(true);
+    setImportProgress(0);
+    setImportStatusText(`Uploading & parsing contacts: ${file.name}...`);
+    
+    let width = 0;
+    const interval = setInterval(() => {
+      if (width < 90) {
+        width += 15;
+        setImportProgress(width);
+      }
+    }, 80);
+    
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/contacts/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      clearInterval(interval);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Spreadsheet ingestion failed.");
+      
+      setImportProgress(100);
+      setImportStatusText(`Success: ${data.message}`);
+      triggerToast(data.message, "success");
+      
+      setTimeout(() => {
+        setImporting(false);
+        setIsImportContactsModalOpen(false);
+        fetchContacts(1);
+        fetchBranches();
+      }, 1500);
+    } catch (err) {
+      clearInterval(interval);
+      setImportProgress(0);
+      setImportStatusText(`Failed: ${err.message}`);
+      triggerToast(err.message, "error");
+      setTimeout(() => setImporting(false), 3000);
+    }
+  };
 
   // ----------------------------------------------------
   // API CALLS
@@ -1549,11 +1801,17 @@ function App() {
           title: "Scheduled Call Reminders",
           subtitle: "View and manage all parent requests for calls, including specific scheduled time slots."
         };
+      case 'contacts':
+        return {
+          meta: "Student Registry",
+          title: "Contacts Directory",
+          subtitle: "Manage parent database records, add individual candidates, and view contact details."
+        };
       default:
         return {
-          meta: "Admissions Portal",
-          title: "Admissions AI Engine",
-          subtitle: "Manage parent communications and automated candidate engagement channels."
+          meta: "WhatsApp Automation Portal",
+          title: "WhatsApp Automation Engine",
+          subtitle: "Manage parent communications and automated outreach channels."
         };
     }
   };
@@ -1591,7 +1849,7 @@ function App() {
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
               </svg>
             </div>
-            {isSidebarOpen && <span className="sidebar-brand-title">Admissions AI</span>}
+            {isSidebarOpen && <span className="sidebar-brand-title">WhatsApp Automation</span>}
           </div>
           {isSidebarOpen && (
             <button 
@@ -1728,15 +1986,38 @@ function App() {
               </span>
             )}
           </button>
+
+          <button 
+            className={`sidebar-menu-item ${activeView === 'contacts' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveView('contacts');
+              setContactsPage(1);
+              fetchContacts(1);
+            }}
+            style={{ 
+              justifyContent: isSidebarOpen ? 'flex-start' : 'center', 
+              padding: isSidebarOpen ? '0.75rem 1rem' : '0.75rem 0',
+              position: 'relative'
+            }}
+            title={!isSidebarOpen ? "Contacts Directory" : undefined}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+            {isSidebarOpen && <span>Contacts Directory</span>}
+          </button>
         </nav>
 
         <div className="sidebar-footer" style={{ padding: isSidebarOpen ? '1.25rem 1rem' : '1.25rem 0.5rem', alignItems: 'center' }}>
           <div className="sidebar-user-info" style={{ justifyContent: isSidebarOpen ? 'flex-start' : 'center', width: '100%', gap: isSidebarOpen ? '0.75rem' : '0' }}>
-            <div className="sidebar-user-avatar" title={!isSidebarOpen ? "Admissions Staff (Administrator)" : undefined}>A</div>
+            <div className="sidebar-user-avatar" title={!isSidebarOpen ? "Administrator" : undefined}>A</div>
             {isSidebarOpen && (
               <div className="sidebar-user-details">
-                <span className="sidebar-user-name">Admissions Staff</span>
-                <span className="sidebar-user-role">Administrator</span>
+                <span className="sidebar-user-name">Administrator</span>
+                <span className="sidebar-user-role">System Admin</span>
               </div>
             )}
           </div>
@@ -1885,8 +2166,7 @@ function App() {
                 { label: "Delivered to Device", value: stats.delivered || 0, color: "var(--color-blue)", desc: "Received on parent's phone" },
                 { label: "Read / Opened", value: stats.read, color: "var(--color-amber)", desc: "Opened and viewed by recipient" },
                 { label: "Replied / Inbound", value: stats.replied || 0, color: "var(--color-coral)", desc: "Engaged in conversation" },
-                { label: "Interested Candidates", value: stats.interested, color: "var(--color-emerald)", desc: "Marked interested by counselor or bot" },
-                { label: "Enrolled Students", value: stats.enrolled || 0, color: "#10b981", desc: "Successfully admitted to college" }
+                { label: "Interested Candidates", value: stats.interested, color: "var(--color-emerald)", desc: "Marked interested by counselor or bot" }
               ];
               
               return steps.map((step, idx) => {
@@ -1905,7 +2185,7 @@ function App() {
                     <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                       <div style={{ flexGrow: 1, height: '18px', backgroundColor: '#f1f5f9', borderRadius: '9px', overflow: 'hidden', position: 'relative' }}>
                         <div style={{ 
-                          width: `${Math.min(100, Math.max(0.5, (step.value / baseValue) * 100))}%`, 
+                          width: `${step.value > 0 ? Math.min(100, Math.max(1, (step.value / baseValue) * 100)) : 0}%`, 
                           height: '100%', 
                           backgroundColor: step.color,
                           borderRadius: '9px',
@@ -3315,7 +3595,7 @@ function App() {
           </div>
 
         <div style={{ display: activeView === 'bot-builder' ? 'block' : 'none', height: '100%', width: '100%' }}>
-          <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} />
+          <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} activeView={activeView} />
         </div>
 
         <div style={{ display: activeView === 'reminders' ? 'block' : 'none', height: '100%', width: '100%' }}>
@@ -3421,6 +3701,203 @@ function App() {
           </div>
         </div>
 
+        <div style={{ display: activeView === 'contacts' ? 'block' : 'none', height: '100%', width: '100%' }}>
+          <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)' }}>
+            {/* Header Area */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+              <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>👥</span> Contacts Directory
+              </h4>
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => setIsImportContactsModalOpen(true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  <span>📥</span> Import Excel/CSV
+                </button>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={() => {
+                    setNewStudentName('');
+                    setNewParentName('');
+                    setNewPhoneNumber('');
+                    setNewBranch('');
+                    setNewPipelineTag('Lead');
+                    setIsAddContactModalOpen(true);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  <span>➕</span> Add Contact
+                </button>
+              </div>
+            </div>
+
+            {/* Filter and Search Bar */}
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '1rem', 
+              marginBottom: '1.25rem', 
+              flexWrap: 'wrap',
+              backgroundColor: 'rgba(255, 255, 255, 0.4)',
+              padding: '0.75rem 1.25rem',
+              borderRadius: '12px',
+              border: '1px solid var(--color-grey-border)'
+            }}>
+              <div className="search-container" style={{ width: '320px', margin: 0 }}>
+                <svg className="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input 
+                  type="text" 
+                  placeholder="Search contacts..." 
+                  value={contactsSearch}
+                  onChange={(e) => setContactsSearch(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Branch:</span>
+                <select 
+                  className="filter-select"
+                  value={contactsBranch}
+                  onChange={(e) => { setContactsBranch(e.target.value); setContactsPage(1); }}
+                  style={{ height: '38px', padding: '0.5rem 2rem 0.5rem 1rem' }}
+                >
+                  <option value="all">All Branches</option>
+                  {branches.map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Contacts Table */}
+            {contactsLoading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '4rem 0', gap: '1rem' }}>
+                <div className="loader-spinner" style={{ borderTopColor: 'var(--color-blue)' }}></div>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading contacts directory...</span>
+              </div>
+            ) : contactsList.length === 0 ? (
+              <div className="empty-container" style={{ padding: '3.5rem 0' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>👥</div>
+                <h5 className="empty-title">No Contacts Found</h5>
+                <p className="empty-desc">Try clearing filters or search queries, or add new contacts manually.</p>
+              </div>
+            ) : (
+              <>
+                <div className="table-container">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Student Name</th>
+                        <th>Parent Name</th>
+                        <th>Phone Number</th>
+                        <th>Branch</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {contactsList.map((contact) => {
+                        const initials = contact.student_name ? contact.student_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'N/A';
+
+                        return (
+                          <tr key={contact.id}>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <div className="avatar-circle" style={{ width: '32px', height: '32px', fontSize: '0.75rem' }}>{initials}</div>
+                                <span className="cell-title" style={{ fontWeight: '600' }}>{contact.student_name}</span>
+                              </div>
+                            </td>
+                            <td>{contact.parent_name}</td>
+                            <td style={{ fontWeight: '500' }}>+{contact.phone_number}</td>
+                            <td>
+                              <span className="badge badge-tag-contacted" style={{ fontSize: '0.75rem', backgroundColor: 'var(--color-blue-light)', color: 'var(--color-blue)', border: '1px solid var(--color-blue-border)' }}>
+                                {contact.selected_branch}
+                              </span>
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => {
+                                    setActiveChatRecordId(contact.id);
+                                    fetchChatHistory(contact.id);
+                                    fetchChatNotes(contact.id);
+                                    setActiveChatSubTab('chat');
+                                    setMobileActiveSubView('thread');
+                                    setActiveView('chat');
+                                    setSelectedChatTemplate('');
+                                    setForceFreeForm(false);
+                                  }}
+                                  title="Open Chat"
+                                >
+                                  💬 Chat
+                                </button>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => {
+                                    setContactToEdit(contact);
+                                    setEditStudentName(contact.student_name);
+                                    setEditParentName(contact.parent_name);
+                                    setEditPhoneNumber(contact.phone_number);
+                                    setEditBranch(contact.selected_branch);
+                                    setEditPipelineTag(contact.pipeline_tag || 'Lead');
+                                    setIsEditContactModalOpen(true);
+                                  }}
+                                  title="Edit Contact"
+                                >
+                                  ✏️ Edit
+                                </button>
+                                <button
+                                  className="btn btn-danger btn-sm"
+                                  onClick={() => handleDeleteContact(contact.id)}
+                                  title="Delete Contact"
+                                >
+                                  🗑️ Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Controls */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Showing <strong>{contactsList.length}</strong> of <strong>{contactsTotal}</strong> contacts
+                  </span>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      disabled={contactsPage === 1}
+                      onClick={() => fetchContacts(contactsPage - 1)}
+                    >
+                      Previous
+                    </button>
+                    <span style={{ display: 'flex', alignItems: 'center', padding: '0 0.75rem', fontSize: '0.875rem', fontWeight: '500' }}>
+                      Page {contactsPage} of {Math.ceil(contactsTotal / contactsLimit) || 1}
+                    </span>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      disabled={contactsPage >= Math.ceil(contactsTotal / contactsLimit)}
+                      onClick={() => fetchContacts(contactsPage + 1)}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
       </main>
 
 
@@ -3495,6 +3972,269 @@ function App() {
               >
                 Confirm
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Contact Modal */}
+      {isAddContactModalOpen && (
+        <div className="confirm-modal-overlay">
+          <div className="confirm-modal-card" style={{ maxWidth: '500px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--color-grey-border)', paddingBottom: '0.75rem', marginBottom: '0.5rem' }}>
+              <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span>➕</span> Add New Contact
+              </h4>
+              <button 
+                onClick={() => setIsAddContactModalOpen(false)} 
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--text-secondary)' }}
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleAddContact} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>Student Name *</label>
+                <input 
+                  type="text" 
+                  className="search-input" 
+                  value={newStudentName}
+                  onChange={(e) => setNewStudentName(e.target.value)}
+                  placeholder="e.g. John Doe"
+                  required
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>Parent Name *</label>
+                <input 
+                  type="text" 
+                  className="search-input" 
+                  value={newParentName}
+                  onChange={(e) => setNewParentName(e.target.value)}
+                  placeholder="e.g. Richard Doe"
+                  required
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>Phone Number *</label>
+                <input 
+                  type="text" 
+                  className="search-input" 
+                  value={newPhoneNumber}
+                  onChange={(e) => setNewPhoneNumber(e.target.value)}
+                  placeholder="e.g. 919381758768"
+                  required
+                  style={{ width: '100%' }}
+                />
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Include country code (e.g. 91 for India) without symbols or spaces.</span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>Academic Branch *</label>
+                <input 
+                  type="text" 
+                  className="search-input" 
+                  value={newBranch}
+                  onChange={(e) => setNewBranch(e.target.value)}
+                  placeholder="e.g. CSE, ECE, EEE, MECH"
+                  required
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  onClick={() => setIsAddContactModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="btn btn-primary"
+                >
+                  Save Contact
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Contact Modal */}
+      {isEditContactModalOpen && contactToEdit && (
+        <div className="confirm-modal-overlay">
+          <div className="confirm-modal-card" style={{ maxWidth: '500px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--color-grey-border)', paddingBottom: '0.75rem', marginBottom: '0.5rem' }}>
+              <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span>✏️</span> Edit Contact Details
+              </h4>
+              <button 
+                onClick={() => setIsEditContactModalOpen(false)} 
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--text-secondary)' }}
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleEditContact} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>Student Name *</label>
+                <input 
+                  type="text" 
+                  className="search-input" 
+                  value={editStudentName}
+                  onChange={(e) => setEditStudentName(e.target.value)}
+                  required
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>Parent Name *</label>
+                <input 
+                  type="text" 
+                  className="search-input" 
+                  value={editParentName}
+                  onChange={(e) => setEditParentName(e.target.value)}
+                  required
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>Phone Number *</label>
+                <input 
+                  type="text" 
+                  className="search-input" 
+                  value={editPhoneNumber}
+                  onChange={(e) => setEditPhoneNumber(e.target.value)}
+                  required
+                  style={{ width: '100%' }}
+                />
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Include country code (e.g. 91 for India) without symbols or spaces.</span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>Academic Branch *</label>
+                <input 
+                  type="text" 
+                  className="search-input" 
+                  value={editBranch}
+                  onChange={(e) => setEditBranch(e.target.value)}
+                  placeholder="e.g. CSE, ECE, EEE, MECH"
+                  required
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  onClick={() => setIsEditContactModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="btn btn-primary"
+                >
+                  Update Contact
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Import Contacts Modal */}
+      {isImportContactsModalOpen && (
+        <div className="confirm-modal-overlay">
+          <div className="confirm-modal-card" style={{ maxWidth: '500px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--color-grey-border)', paddingBottom: '0.75rem', marginBottom: '0.5rem' }}>
+              <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span>📥</span> Bulk Import Contacts
+              </h4>
+              <button 
+                onClick={() => setIsImportContactsModalOpen(false)} 
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--text-secondary)' }}
+              >
+                &times;
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
+                Upload an Excel (.xlsx) or CSV (.csv) file to import multiple contacts. The file should have columns matching: 
+                <strong> Student Name</strong>, <strong>Parent Name</strong>, <strong>Phone Number</strong>, and <strong>Branch</strong>.
+              </p>
+
+              <div style={{
+                border: '2px dashed var(--color-blue-border)',
+                borderRadius: '8px',
+                padding: '2rem 1.5rem',
+                textAlign: 'center',
+                backgroundColor: 'var(--color-blue-light)',
+                cursor: 'pointer',
+                position: 'relative'
+              }}>
+                <input 
+                  type="file" 
+                  accept=".xlsx,.csv" 
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) {
+                      handleImportContacts(e.target.files[0]);
+                    }
+                  }}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    opacity: 0,
+                    cursor: 'pointer',
+                    width: '100%',
+                    height: '100%'
+                  }}
+                />
+                <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>📊</div>
+                <span style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--color-blue)' }}>Click or Drag Spreadsheet to Upload</span>
+                <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Supports .xlsx and .csv files</span>
+              </div>
+
+              {importing && (
+                <div style={{ 
+                  backgroundColor: 'rgba(255,255,255,0.8)',
+                  padding: '1rem',
+                  borderRadius: '6px',
+                  border: '1px solid var(--color-blue-border)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: '600', marginBottom: '0.35rem' }}>
+                    <span style={{ color: 'var(--text-primary)' }}>{importStatusText}</span>
+                    <span style={{ color: 'var(--color-blue)' }}>{importProgress}%</span>
+                  </div>
+                  <div style={{ height: '6px', width: '100%', backgroundColor: 'var(--color-grey-border)', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${importProgress}%`, backgroundColor: 'var(--color-blue)', transition: 'width 0.1s ease-out' }}></div>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  disabled={importing}
+                  onClick={() => setIsImportContactsModalOpen(false)}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </div>

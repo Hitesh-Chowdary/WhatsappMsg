@@ -302,7 +302,7 @@ async def init_db():
             default_rules = [
                 AutoReplyRule(
                     keyword="default",
-                    reply_text="Thank you for contacting our Admissions Portal! A counselor has been notified and will respond to you shortly. Feel free to ask about fees, hostel, or eligibility."
+                    reply_text="Thank you for contacting our WhatsApp Automation Portal! A counselor has been notified and will respond to you shortly. Feel free to ask about fees, hostel, or eligibility."
                 ),
                 AutoReplyRule(
                     keyword="fees",
