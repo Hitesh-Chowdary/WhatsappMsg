@@ -2324,6 +2324,44 @@ async def get_unique_branches(
     branches = res.scalars().all()
     return [b for b in branches if b]
 
+# Reminders Fetching API
+@app.get("/api/v1/reminders")
+async def get_reminders(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Fetches all records that have a scheduled call reminder active."""
+    stmt = select(Record).where(
+        and_(
+            Record.variables.is_not(None),
+            Record.variables["scheduled_call"].is_not(None)
+        )
+    ).order_by(Record.id.desc())
+    
+    res = await db.execute(stmt)
+    records = res.scalars().all()
+    
+    # Pre-fetch unresolved notes counts
+    record_ids = [rec.id for rec in records]
+    unresolved_counts = {}
+    if record_ids:
+        notes_stmt = select(RecordNote.record_id, func.count(RecordNote.id)).where(
+            and_(
+                RecordNote.record_id.in_(record_ids),
+                RecordNote.resolved == False
+            )
+        ).group_by(RecordNote.record_id)
+        notes_res = await db.execute(notes_stmt)
+        unresolved_counts = {record_id: count for record_id, count in notes_res.all()}
+
+    reminders = []
+    for rec in records:
+        rec_dict = rec.to_dict()
+        rec_dict["unresolved_notes_count"] = unresolved_counts.get(rec.id, 0)
+        rec_dict["parent_response"] = map_response_for_display(rec_dict.get("parent_response"))
+        reminders.append(rec_dict)
+    return reminders
+
 # Records Fetching Grid API
 @app.get("/api/v1/records")
 async def get_records_list(
