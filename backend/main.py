@@ -1532,12 +1532,6 @@ async def process_webhook_event(
         rec.read_at = log.read_at
         rec.responded_at = log.responded_at
         
-        # Increment unread count for quick reply
-        if event == "quick_reply":
-            current_vars = rec.variables or {}
-            unread = current_vars.get("unread_count", 0)
-            rec.variables = {**current_vars, "unread_count": unread + 1}
-        
         # Auto-tag based on parent response transitions
         if rec.parent_response == "Not Interested":
             rec.pipeline_tag = "Not Interested"
