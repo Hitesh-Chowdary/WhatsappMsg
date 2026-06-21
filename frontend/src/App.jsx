@@ -170,6 +170,7 @@ function App() {
   const [typedMessage, setTypedMessage] = useState('');
   const [chatSearchText, setChatSearchText] = useState('');
   const [chatBranchFilter, setChatBranchFilter] = useState('all');
+  const [chatStatusFilter, setChatStatusFilter] = useState('all');
   const [mobileActiveSubView, setMobileActiveSubView] = useState('list'); // 'list', 'thread', 'rules'
   const [rulesList, setRulesList] = useState([]);
   const [newRuleKeyword, setNewRuleKeyword] = useState('');
@@ -331,6 +332,10 @@ function App() {
         const data = await res.json();
         setChatHistory(data.messages || []);
         setChatSession(data.session || { active: false, expires_at: null, time_remaining_seconds: 0 });
+        // Clear unread count for this record instantly in the local chatsList state
+        setChatsList(prev => prev.map(c => 
+          c.record.id === recordId ? { ...c, record: { ...c.record, unread_count: 0 } } : c
+        ));
       }
     } catch (err) {
       console.error("Error fetching chat history:", err);
@@ -529,6 +534,22 @@ function App() {
     }, 8000);
     
     return () => clearInterval(chatsInterval);
+  }, [token, activeView]);
+
+  // Global poll for recent chats to keep the sidebar notification badge updated
+  useEffect(() => {
+    if (!token) return;
+    
+    // Initial fetch
+    fetchRecentChats();
+    
+    const globalChatsInterval = setInterval(() => {
+      if (activeView !== 'chat') {
+        fetchRecentChats();
+      }
+    }, 10000);
+    
+    return () => clearInterval(globalChatsInterval);
   }, [token, activeView]);
 
   // Set up polling for active chat history if one is selected
@@ -1601,14 +1622,40 @@ function App() {
             onClick={() => setActiveView('chat')}
             style={{ 
               justifyContent: isSidebarOpen ? 'flex-start' : 'center', 
-              padding: isSidebarOpen ? '0.75rem 1rem' : '0.75rem 0' 
+              padding: isSidebarOpen ? '0.75rem 1rem' : '0.75rem 0',
+              position: 'relative'
             }}
-            title={!isSidebarOpen ? "Live Chat Support" : undefined}
+            title={!isSidebarOpen ? "Inbox" : undefined}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
-            {isSidebarOpen && <span>Live Chat Support</span>}
+            {isSidebarOpen && <span>Inbox</span>}
+            {(() => {
+              const count = chatsList.reduce((acc, chat) => acc + (chat.record.unread_count || 0), 0);
+              return count > 0 ? (
+                <span className="badge-notification" style={{
+                  backgroundColor: 'var(--color-blue)',
+                  color: '#fff',
+                  borderRadius: '50%',
+                  minWidth: '18px',
+                  height: '18px',
+                  fontSize: '0.7rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 'bold',
+                  marginLeft: isSidebarOpen ? 'auto' : '0',
+                  position: isSidebarOpen ? 'static' : 'absolute',
+                  top: isSidebarOpen ? 'auto' : '4px',
+                  right: isSidebarOpen ? 'auto' : '4px',
+                  padding: '0 4px',
+                  boxShadow: '0 2px 4px rgba(37, 99, 235, 0.3)'
+                }}>
+                  {count}
+                </span>
+              ) : null;
+            })()}
           </button>
 
           <button 
@@ -2692,24 +2739,56 @@ function App() {
                     🤖 Rules
                   </button>
                 </div>
-                <select 
-                  className="filter-select" 
-                  style={{ width: '100%', padding: '0.45rem 0.75rem', fontSize: '0.813rem', height: '34px' }}
-                  value={chatBranchFilter}
-                  onChange={(e) => setChatBranchFilter(e.target.value)}
-                >
-                  <option value="all">All Branches</option>
-                  {branches.map(b => (
-                    <option key={b} value={b}>{b}</option>
-                  ))}
-                </select>
+                <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                  <select 
+                    className="filter-select" 
+                    style={{ flex: 1, padding: '0.45rem 0.75rem', fontSize: '0.813rem', height: '34px', minWidth: 0 }}
+                    value={chatBranchFilter}
+                    onChange={(e) => setChatBranchFilter(e.target.value)}
+                  >
+                    <option value="all">All Branches</option>
+                    {branches.map(b => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+
+                  <select 
+                    className="filter-select" 
+                    style={{ flex: 1, padding: '0.45rem 0.75rem', fontSize: '0.813rem', height: '34px', minWidth: 0 }}
+                    value={chatStatusFilter}
+                    onChange={(e) => setChatStatusFilter(e.target.value)}
+                  >
+                    <option value="all">All Chats</option>
+                    <option value="unread">Unread</option>
+                    <option value="unreplied">Unreplied</option>
+                    <option value="interested">Interested</option>
+                    <option value="not_interested">Not Interested</option>
+                    <option value="no_tag">No Tag</option>
+                  </select>
+                </div>
               </div>
               <div className="conversations-scrollable">
                 {chatsList.filter(chat => {
                   const matchSearch = chat.record.student_name.toLowerCase().includes(chatSearchText.toLowerCase()) ||
                                       chat.record.phone_number.includes(chatSearchText);
                   const matchBranch = chatBranchFilter === 'all' || chat.record.selected_branch === chatBranchFilter;
-                  return matchSearch && matchBranch;
+                  
+                  let matchStatus = true;
+                  const lastMsg = chat.last_message;
+                  
+                  if (chatStatusFilter === 'unread') {
+                    matchStatus = (chat.record.unread_count || 0) > 0;
+                  } else if (chatStatusFilter === 'unreplied') {
+                    matchStatus = lastMsg && lastMsg.sender === 'parent';
+                  } else if (chatStatusFilter === 'interested') {
+                    matchStatus = chat.record.pipeline_tag === 'Interested' || chat.record.parent_response === 'Interested';
+                  } else if (chatStatusFilter === 'not_interested') {
+                    matchStatus = chat.record.pipeline_tag === 'Not Interested' || chat.record.parent_response === 'Not Interested';
+                  } else if (chatStatusFilter === 'no_tag') {
+                    matchStatus = !chat.record.pipeline_tag || chat.record.pipeline_tag === 'Lead';
+                  }
+                  
+                  return matchSearch && matchBranch && matchStatus;
                 }).map(chat => {
                   const isActive = chat.record.id === activeChatRecordId;
                   const lastMsg = chat.last_message;
@@ -2773,7 +2852,41 @@ function App() {
                           )}
                           <span className="conv-time" style={{ whiteSpace: 'nowrap' }}>{lastMsgTime}</span>
                         </div>
-                        <p className="conv-msg-preview">{lastMsg ? lastMsg.message_text : 'No messages yet'}</p>
+                        <div className="conv-preview-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '0.4rem', marginTop: '2px' }}>
+                          <p className="conv-msg-preview" style={{ flexGrow: 1, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {lastMsg ? lastMsg.message_text : 'No messages yet'}
+                          </p>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                            {chat.record.unread_count > 0 && (
+                              <span style={{
+                                backgroundColor: 'var(--color-blue)',
+                                color: '#fff',
+                                borderRadius: '50%',
+                                minWidth: '18px',
+                                height: '18px',
+                                fontSize: '0.7rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 'bold',
+                                padding: '0 4px',
+                                boxShadow: '0 1px 3px rgba(37, 99, 235, 0.3)'
+                              }}>
+                                {chat.record.unread_count}
+                              </span>
+                            )}
+                            {lastMsg && lastMsg.sender === 'parent' && (
+                              <span style={{
+                                width: '8px',
+                                height: '8px',
+                                backgroundColor: 'var(--color-blue)',
+                                borderRadius: '50%',
+                                display: 'inline-block',
+                                boxShadow: '0 0 4px rgba(37, 99, 235, 0.5)'
+                              }}></span>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   );

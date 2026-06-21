@@ -1506,6 +1506,15 @@ async def process_webhook_event(
                 log.delivered_at = datetime.utcnow()
             if not log.read_at:
                 log.read_at = datetime.utcnow()
+                
+            # Log quick reply in chat history
+            chat_msg = ChatMessage(
+                record_id=log.record_id,
+                sender="parent",
+                message_text=button_text,
+                message_id=f"qr_{message_id[:15]}"
+            )
+            db.add(chat_msg)
             
     # Mirror updates to the legacy Record table so direct database checks are synced
     rec_stmt = select(Record).where(Record.id == log.record_id)
@@ -1521,6 +1530,12 @@ async def process_webhook_event(
         rec.delivered_at = log.delivered_at
         rec.read_at = log.read_at
         rec.responded_at = log.responded_at
+        
+        # Increment unread count for quick reply
+        if event == "quick_reply":
+            current_vars = rec.variables or {}
+            unread = current_vars.get("unread_count", 0)
+            rec.variables = {**current_vars, "unread_count": unread + 1}
         
         # Auto-tag based on parent response
         if rec.parent_response == "Interested":
@@ -1869,6 +1884,11 @@ async def handle_incoming_text_reply(
         message_id=message_id
     )
     db.add(chat_msg)
+    
+    # Increment unread count in variables
+    current_vars = record.variables or {}
+    unread = current_vars.get("unread_count", 0)
+    record.variables = {**current_vars, "unread_count": unread + 1}
     
     # Fetch latest CampaignLog for mirror updates
     log_stmt = select(CampaignLog).where(CampaignLog.record_id == record.id).order_by(CampaignLog.id.desc()).limit(1)
@@ -2879,6 +2899,16 @@ async def get_chat_history(
             time_remaining_seconds = int(86400 - diff_seconds)
             session_expires_at = (last_parent_msg.created_at + timedelta(hours=24)).isoformat()
             
+    # Reset unread count to 0 when history is fetched by counselor
+    rec_stmt = select(Record).where(Record.id == record_id)
+    rec_res = await db.execute(rec_stmt)
+    record_obj = rec_res.scalar_one_or_none()
+    if record_obj:
+        current_vars = record_obj.variables or {}
+        if current_vars.get("unread_count", 0) > 0:
+            record_obj.variables = {**current_vars, "unread_count": 0}
+            await db.commit()
+
     return {
         "messages": [msg.to_dict() for msg in messages],
         "session": {
@@ -2924,6 +2954,11 @@ async def send_manual_chat_message(
     # Update candidate response state
     record.parent_response = "Counselor Replied"
     record.responded_at = datetime.utcnow()
+    
+    # Reset unread count to 0
+    current_vars = record.variables or {}
+    if current_vars.get("unread_count", 0) > 0:
+        record.variables = {**current_vars, "unread_count": 0}
     
     # Also mirror update to latest CampaignLog if it exists
     log_stmt = select(CampaignLog).where(CampaignLog.record_id == record.id).order_by(CampaignLog.id.desc()).limit(1)
@@ -3014,6 +3049,11 @@ async def send_manual_chat_template(
     record.sent_template = template.template_name
     record.sent_at = log_obj.sent_at
     record.message_id = log_obj.message_id
+
+    # Reset unread count to 0 when manual template is sent
+    current_vars = record.variables or {}
+    if current_vars.get("unread_count", 0) > 0:
+        record.variables = {**current_vars, "unread_count": 0}
 
     await db.commit()
     
