@@ -2196,20 +2196,6 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 )
             else:
                 # legacy events (status_update, quick_reply)
-                # If quick_reply, let's also log the incoming text in ChatMessage
-                if payload_obj.event == "quick_reply":
-                    stmt = select(CampaignLog).where(CampaignLog.message_id == payload_obj.message_id)
-                    res = await db.execute(stmt)
-                    log = res.scalars().first()
-                    if log:
-                        chat_msg = ChatMessage(
-                            record_id=log.record_id,
-                            sender="parent",
-                            message_text=payload_obj.button_text or "Interested",
-                            message_id=payload_obj.message_id
-                        )
-                        db.add(chat_msg)
-                
                 return await process_webhook_event(
                     event=payload_obj.event,
                     message_id=payload_obj.message_id,

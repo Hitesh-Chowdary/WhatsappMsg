@@ -23,14 +23,16 @@ else:
     # Fallback default for local development
     DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/whatsapp_sms"
 
-# Create async engine with pooling enabled
-engine = create_async_engine(
-    DATABASE_URL,
-    pool_size=20,
-    max_overflow=10,
-    pool_recycle=1800,
-    pool_pre_ping=True
-)
+# Create async engine with pooling enabled (conditional parameters for SQLite compatibility)
+engine_args = {
+    "pool_recycle": 1800,
+    "pool_pre_ping": True
+}
+if not DATABASE_URL.startswith("sqlite"):
+    engine_args["pool_size"] = 20
+    engine_args["max_overflow"] = 10
+
+engine = create_async_engine(DATABASE_URL, **engine_args)
 
 # Async session factory
 AsyncSessionLocal = async_sessionmaker(

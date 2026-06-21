@@ -17,7 +17,7 @@ except ImportError:
     sys.exit(1)
 
 # Default Local API server URL (run 'uvicorn main:app --reload' on port 8000 first)
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "http://127.0.0.1:8001"
 
 async def run_tests():
     logger.info("Initializing Admission Engine Integration Test Suite...")
@@ -356,7 +356,7 @@ async def run_tests():
             logger.info(f"Testing Fetch Chat History for Record ID {target_record_id} (/api/v1/chat/history/{target_record_id})...")
             chat_hist_res = await client.get(f"/api/v1/chat/history/{target_record_id}", headers=headers)
             assert chat_hist_res.status_code == 200, f"Fetch chat history failed: {chat_hist_res.text}"
-            history = chat_hist_res.json()
+            history = chat_hist_res.json()["messages"]
             logger.info(f"Successfully retrieved chat history. Messages count: {len(history)}")
             
             # 16. Test Send Counselor Free-Form Message
@@ -389,10 +389,19 @@ async def run_tests():
             
             # 18. Test Webhook Ingestion & Chatbot Reply Trigger
             logger.info("Testing Webhook Ingestion with simulated custom student reply...")
+            records_res = await client.get("/api/v1/records", headers=headers)
+            records_list = records_res.json()["records"]
+            chatbot_target = next(r for r in records_list if r["id"] != record_id)
+            chatbot_target_id = chatbot_target["id"]
+            chatbot_phone = chatbot_target["phone_number"]
+            logger.info(f"Targeting record ID {chatbot_target_id} ({chatbot_phone}) for chatbot test...")
+
+            import uuid
+            sim_msg_id = f"wa_sim_test_msg_{uuid.uuid4().hex[:8]}"
             sim_student_text_payload = {
                 "event": "incoming_text",
-                "message_id": "wa_sim_test_msg_999",
-                "from_phone": test_record["phone_number"],
+                "message_id": sim_msg_id,
+                "from_phone": chatbot_phone,
                 "text_body": "Can you tell me about scholarship criteria?"
             }
             webhook_text_res = await client.post("/api/v1/whatsapp/webhook", json=sim_student_text_payload)
@@ -400,11 +409,11 @@ async def run_tests():
             logger.info("Webhook text reply processed. Checking if chatbot auto-responded...")
             
             # Fetch chat history again to verify the chatbot's reply was logged
-            chat_hist_after_res = await client.get(f"/api/v1/chat/history/{target_record_id}", headers=headers)
-            history_after = chat_hist_after_res.json()
+            chat_hist_after_res = await client.get(f"/api/v1/chat/history/{chatbot_target_id}", headers=headers)
+            history_after = chat_hist_after_res.json()["messages"]
             
             # We expect two new messages in history: the student's question and the bot's auto-reply!
-            parent_msg = next((m for m in history_after if m["message_id"] == "wa_sim_test_msg_999"), None)
+            parent_msg = next((m for m in history_after if m["message_id"] == sim_msg_id), None)
             assert parent_msg is not None, "Simulated student message was not found in chat history"
             
             # The bot's message should follow the parent message and match the scholarship rule text
@@ -417,6 +426,73 @@ async def run_tests():
             delete_res = await client.delete(f"/api/v1/chat/rules/{added_rule['id']}", headers=headers)
             assert delete_res.status_code == 200, f"Delete rule failed: {delete_res.text}"
             logger.info("Cleanup completed successfully.")
+
+            # 19. Test Contacts CRUD Endpoints
+            logger.info("Testing Contacts CRUD endpoints (/api/v1/contacts)...")
+            # GET list
+            contacts_res = await client.get("/api/v1/contacts?limit=10", headers=headers)
+            assert contacts_res.status_code == 200, f"Fetch contacts failed: {contacts_res.text}"
+            contacts_data = contacts_res.json()
+            initial_count = contacts_data["total"]
+            logger.info(f"Initial contacts count: {initial_count}")
+
+            # POST create
+            new_contact_payload = {
+                "student_name": "Test Contact",
+                "parent_name": "Parent Test",
+                "selected_branch": "Computer Science",
+                "phone_number": "8888888888",
+                "pipeline_tag": "Lead"
+            }
+            create_res = await client.post("/api/v1/contacts", json=new_contact_payload, headers=headers)
+            assert create_res.status_code == 200, f"Create contact failed: {create_res.text}"
+            created_contact = create_res.json()["contact"]
+            assert created_contact["student_name"] == "Test Contact"
+            assert created_contact["phone_number"] == "918888888888" # Normalized
+            logger.info("Created new manual contact with phone normalization.")
+
+            # POST create duplicate check
+            dup_res = await client.post("/api/v1/contacts", json=new_contact_payload, headers=headers)
+            assert dup_res.status_code == 400, f"Expected duplicate error 400, got: {dup_res.status_code}"
+            logger.info("Duplicate contact creation correctly rejected.")
+
+            # PUT update
+            update_payload = {
+                "student_name": "Updated Test Contact",
+                "pipeline_tag": "Contacted"
+            }
+            contact_id = created_contact["id"]
+            update_res = await client.put(f"/api/v1/contacts/{contact_id}", json=update_payload, headers=headers)
+            assert update_res.status_code == 200, f"Update contact failed: {update_res.text}"
+            updated_contact = update_res.json()["contact"]
+            assert updated_contact["student_name"] == "Updated Test Contact"
+            assert updated_contact["pipeline_tag"] == "Contacted"
+            logger.info("Successfully updated contact details.")
+
+            # DELETE contact
+            delete_contact_res = await client.delete(f"/api/v1/contacts/{contact_id}", headers=headers)
+            assert delete_contact_res.status_code == 200, f"Delete contact failed: {delete_contact_res.text}"
+            
+            # Verify deleted contact is gone
+            contacts_after_res = await client.get("/api/v1/contacts?limit=10", headers=headers)
+            assert contacts_after_res.json()["total"] == initial_count, "Deleted contact still exists in total count"
+            logger.info("Contact deletion verified.")
+
+            # 20. Test Contacts Bulk Ingestion (Spreadsheet Upload)
+            logger.info("Testing Contacts Spreadsheet Ingestion (/api/v1/contacts/upload)...")
+            contacts_csv = (
+                "Student Name,Parent Name,Selected Branch,Phone Number\n"
+                "Ingest Student 1,Parent Ingest 1,Information Technology,7777777777\n"
+                "Ingest Student 2,Parent Ingest 2,Electronics,6666666666\n"
+            )
+            contacts_csv_bytes = contacts_csv.encode("utf-8")
+            upload_files = {"file": ("test_contacts_upload.csv", contacts_csv_bytes, "text/csv")}
+            
+            upload_res = await client.post("/api/v1/contacts/upload", files=upload_files, headers=headers)
+            assert upload_res.status_code == 200, f"Contacts upload failed: {upload_res.text}"
+            upload_json = upload_res.json()
+            assert upload_json["added"] == 2 or upload_json["updated"] == 2, f"Expected 2 added or updated contacts, got: added={upload_json['added']}, updated={upload_json['updated']}"
+            logger.info("Contacts uploaded via CSV successfully.")
 
             logger.info("All integration tests PASSED successfully.")
             
