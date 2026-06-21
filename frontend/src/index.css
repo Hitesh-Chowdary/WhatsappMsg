@@ -1809,4 +1809,14 @@ body {
     border-color: var(--color-coral-border) !important;
 }
 
+.desktop-only-flex {
+    display: inline-flex !important;
+}
+
+@media (max-width: 1024px) {
+    .desktop-only-flex {
+        display: none !important;
+    }
+}
+
 

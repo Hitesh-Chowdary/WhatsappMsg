@@ -1528,6 +1528,8 @@ async def process_webhook_event(
         elif rec.parent_response == "Not Interested":
             rec.pipeline_tag = "Not Interested"
             
+        detect_and_save_call_request(rec, button_text)
+            
     await db.commit()
     logger.info(f"Updated CampaignLog ID {log.id} status via webhook callback processing.")
     
@@ -1786,7 +1788,28 @@ def resolve_template_text(template_text: str, record, merged_vars: dict) -> str:
                     msg_body = msg_body.replace(f"{{{{{dp}}}}}", str(val))
                     break
                     
-    return msg_body
+def detect_and_save_call_request(record, text: str):
+    if not text:
+        return
+    txt = text.strip()
+    
+    # Initialize variables if None
+    if record.variables is None:
+        record.variables = {}
+        
+    # 1. Direct Call request
+    if txt.lower() in ["call", "call counselor", "call directly", "call admin"]:
+        record.variables = {**record.variables, "scheduled_call": "Direct Call"}
+        logger.info(f"Detected Direct Call request for record ID {record.id}")
+        
+    # 2. Time slot matching (regex for 1PM, 3PM, 1:00 PM, etc.)
+    else:
+        import re
+        match = re.search(r'\b\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\b', txt)
+        if match:
+            time_slot = match.group(0).upper().replace(" ", "")
+            record.variables = {**record.variables, "scheduled_call": time_slot}
+            logger.info(f"Detected Scheduled Call request at {time_slot} for record ID {record.id}")
 
 def map_response_for_display(raw_response: Optional[str]) -> str:
     if not raw_response:
@@ -2001,6 +2024,8 @@ async def handle_incoming_text_reply(
             record.pipeline_tag = None
         elif record.parent_response == "Not Interested":
             record.pipeline_tag = "Not Interested"
+            
+        detect_and_save_call_request(record, message_text)
         
         # Mirror updates to latest CampaignLog if it exists
         if latest_log:
@@ -2507,6 +2532,12 @@ async def update_record_tag(
         latest_log = log_res.scalars().first()
         if latest_log:
             latest_log.parent_response = "Interested"
+            
+    # Clear scheduled call reminder once counselor takes action (tag updated to Interested or Not Interested)
+    if payload.pipeline_tag in ["Interested", "Not Interested"] and record.variables:
+        new_vars = {**record.variables}
+        new_vars.pop("scheduled_call", None)
+        record.variables = new_vars
             
     await db.commit()
     

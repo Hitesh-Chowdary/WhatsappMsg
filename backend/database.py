@@ -96,7 +96,8 @@ class Record(Base):
             "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
             "read_at": self.read_at.isoformat() if self.read_at else None,
             "responded_at": self.responded_at.isoformat() if self.responded_at else None,
-            "created_at": self.created_at.isoformat() if self.created_at else None
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "scheduled_call": self.variables.get("scheduled_call") if self.variables else None
         }
 
 class CampaignLog(Base):

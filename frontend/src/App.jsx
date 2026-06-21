@@ -182,6 +182,7 @@ function App() {
   const [addingNote, setAddingNote] = useState(false);
   const [chatSession, setChatSession] = useState({ active: false, expires_at: null, time_remaining_seconds: 0 });
   const [selectedChatTemplate, setSelectedChatTemplate] = useState('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const [secondsLeft, setSecondsLeft] = useState(0);
 
@@ -2542,9 +2543,15 @@ function App() {
         </section>
         </div>
 
-        <div className="chat-container" style={{ display: activeView === 'chat' ? 'grid' : 'none' }}>
+        <div 
+          className="chat-container" 
+          style={{ 
+            display: activeView === 'chat' ? 'grid' : 'none',
+            gridTemplateColumns: isSidebarOpen ? undefined : '1fr 360px'
+          }}
+        >
             {/* 1. Recent Chats List Pane */}
-            <div className="glass-panel chat-list-panel">
+            <div className="glass-panel chat-list-panel" style={{ display: isSidebarOpen ? 'flex' : 'none' }}>
               <div className="chat-search-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%' }}>
                   <input 
@@ -2644,6 +2651,13 @@ function App() {
                           )}
                           <span className="conv-time" style={{ whiteSpace: 'nowrap' }}>{lastMsgTime}</span>
                         </div>
+                        {chat.record.scheduled_call && (
+                          <div style={{ margin: '0.15rem 0 0.25rem 0' }}>
+                            <span className="badge" style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem', fontWeight: '600', backgroundColor: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+                              📅 Scheduled: {chat.record.scheduled_call}
+                            </span>
+                          </div>
+                        )}
                         <p className="conv-msg-preview">{lastMsg ? lastMsg.message_text : 'No messages yet'}</p>
                       </div>
                     </div>
@@ -2668,6 +2682,13 @@ function App() {
                       style={{ padding: '0.4rem 0.6rem' }}
                     >
                       ← Back
+                    </button>
+                    <button 
+                      className="btn btn-secondary btn-sm desktop-only-flex" 
+                      onClick={() => setIsSidebarOpen(prev => !prev)}
+                      style={{ padding: '0.4rem 0.6rem' }}
+                    >
+                      {isSidebarOpen ? '⇤ Collapse Sidebar' : '⇥ Sidebar'}
                     </button>
                     <div className="chat-header-title" style={{ flexGrow: 1 }}>
                       {(() => {
@@ -2726,6 +2747,28 @@ function App() {
                       })()}
                     </div>
                   </div>
+
+                  {(() => {
+                    const activeChat = chatsList.find(c => c.record.id === activeChatRecordId);
+                    if (activeChat && activeChat.record.scheduled_call) {
+                      return (
+                        <div style={{ 
+                          padding: '0.6rem 1.2rem', 
+                          borderBottom: '1px solid #fde68a',
+                          backgroundColor: '#fffbeb', 
+                          color: '#b45309', 
+                          display: 'flex', 
+                          gap: '0.5rem', 
+                          alignItems: 'center',
+                          fontSize: '0.85rem',
+                          fontWeight: '600'
+                        }}>
+                          <span>📞 <strong>Call Requested:</strong> Parent wants to talk / scheduled a call at {activeChat.record.scheduled_call}.</span>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                   
                   <div className="chat-window-tabs" style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', backgroundColor: '#f8fafc' }}>
                     <button 
