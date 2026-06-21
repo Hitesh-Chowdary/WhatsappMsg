@@ -2391,13 +2391,23 @@ async def get_records_list(
             template_obj = tmpl_res.scalars().first()
         selected_template = template_obj.template_name if template_obj else "admission_outreach"
 
-    # Core query: Outer join on CampaignLog specifically for this template
+    # Subquery to find the latest CampaignLog.id for each record_id under the selected template
+    log_subq = select(
+        CampaignLog.record_id,
+        func.max(CampaignLog.id).label("max_id")
+    ).where(
+        CampaignLog.template_name == selected_template
+    ).group_by(
+        CampaignLog.record_id
+    ).subquery()
+
+    # Core query: Outer join on the subquery, then join with CampaignLog on max_id to prevent duplicates
     stmt = select(Record, CampaignLog).outerjoin(
+        log_subq,
+        Record.id == log_subq.c.record_id
+    ).outerjoin(
         CampaignLog,
-        and_(
-            CampaignLog.record_id == Record.id,
-            CampaignLog.template_name == selected_template
-        )
+        CampaignLog.id == log_subq.c.max_id
     )
     
     # Apply search filter
@@ -2675,12 +2685,23 @@ async def export_records_to_excel(
             template_obj = tmpl_res.scalars().first()
         selected_template = template_obj.template_name if template_obj else "admission_outreach"
 
+    # Subquery to find the latest CampaignLog.id for each record_id under the selected template
+    log_subq = select(
+        CampaignLog.record_id,
+        func.max(CampaignLog.id).label("max_id")
+    ).where(
+        CampaignLog.template_name == selected_template
+    ).group_by(
+        CampaignLog.record_id
+    ).subquery()
+
+    # Core query: Outer join on the subquery, then join with CampaignLog on max_id to prevent duplicates
     stmt = select(Record, CampaignLog).outerjoin(
+        log_subq,
+        Record.id == log_subq.c.record_id
+    ).outerjoin(
         CampaignLog,
-        and_(
-            CampaignLog.record_id == Record.id,
-            CampaignLog.template_name == selected_template
-        )
+        CampaignLog.id == log_subq.c.max_id
     )
     
     # Apply filters (exactly matching get_records_list)
