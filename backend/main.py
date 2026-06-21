@@ -1521,6 +1521,7 @@ async def process_webhook_event(
     rec_res = await db.execute(rec_stmt)
     rec = rec_res.scalars().first()
     if rec:
+        old_parent_response = rec.parent_response
         rec.campaign_status = log.campaign_status
         rec.delivery_status = log.delivery_status
         rec.parent_response = log.parent_response
@@ -1537,11 +1538,11 @@ async def process_webhook_event(
             unread = current_vars.get("unread_count", 0)
             rec.variables = {**current_vars, "unread_count": unread + 1}
         
-        # Auto-tag based on parent response
-        if rec.parent_response == "Interested":
-            rec.pipeline_tag = None
-        elif rec.parent_response == "Not Interested":
+        # Auto-tag based on parent response transitions
+        if rec.parent_response == "Not Interested":
             rec.pipeline_tag = "Not Interested"
+        elif rec.parent_response == "Interested" and old_parent_response == "Not Interested":
+            rec.pipeline_tag = None
             
         detect_and_save_call_request(rec, button_text)
             
@@ -2035,15 +2036,16 @@ async def handle_incoming_text_reply(
         db.add(auto_chat_msg)
         
         # Update record response state
+        old_parent_response = record.parent_response
         if record.parent_response != "Counselor Needed":
             record.parent_response = normalize_parent_response(source_keyword)
         record.responded_at = datetime.utcnow()
         
-        # Auto-tag based on parent response
-        if record.parent_response == "Interested":
-            record.pipeline_tag = None
-        elif record.parent_response == "Not Interested":
+        # Auto-tag based on parent response transitions
+        if record.parent_response == "Not Interested":
             record.pipeline_tag = "Not Interested"
+        elif record.parent_response == "Interested" and old_parent_response == "Not Interested":
+            record.pipeline_tag = None
             
         detect_and_save_call_request(record, message_text)
         
@@ -2489,7 +2491,19 @@ async def get_records_list(
     if pipeline_tag:
         val = pipeline_tag.lower()
         if val in ["lead", "none", "no tag", "no_tag"]:
-            stmt = stmt.where(or_(Record.pipeline_tag == None, Record.pipeline_tag == "", Record.pipeline_tag.ilike("lead")))
+            stmt = stmt.where(
+                and_(
+                    or_(Record.pipeline_tag == None, Record.pipeline_tag == "", Record.pipeline_tag.ilike("lead")),
+                    or_(Record.parent_response == None, Record.parent_response == "No Response")
+                )
+            )
+        elif val == "pending":
+            stmt = stmt.where(
+                and_(
+                    or_(Record.pipeline_tag == None, Record.pipeline_tag == "", Record.pipeline_tag.ilike("lead")),
+                    Record.parent_response == "Interested"
+                )
+            )
         else:
             stmt = stmt.where(Record.pipeline_tag.ilike(pipeline_tag))
             
@@ -2690,6 +2704,7 @@ async def export_records_to_excel(
     responded: Optional[str] = None,
     branch: Optional[str] = None,
     template: Optional[str] = None,
+    pipeline_tag: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
@@ -2778,6 +2793,25 @@ async def export_records_to_excel(
             stmt = stmt.where(CampaignLog.parent_response != None, CampaignLog.parent_response != "No Response")
         else:
             stmt = stmt.where(or_(CampaignLog.parent_response == None, CampaignLog.parent_response == "No Response"))
+            
+    if pipeline_tag:
+        val = pipeline_tag.lower()
+        if val in ["lead", "none", "no tag", "no_tag"]:
+            stmt = stmt.where(
+                and_(
+                    or_(Record.pipeline_tag == None, Record.pipeline_tag == "", Record.pipeline_tag.ilike("lead")),
+                    or_(Record.parent_response == None, Record.parent_response == "No Response")
+                )
+            )
+        elif val == "pending":
+            stmt = stmt.where(
+                and_(
+                    or_(Record.pipeline_tag == None, Record.pipeline_tag == "", Record.pipeline_tag.ilike("lead")),
+                    Record.parent_response == "Interested"
+                )
+            )
+        else:
+            stmt = stmt.where(Record.pipeline_tag.ilike(pipeline_tag))
             
     # Retrieve all matched items without pagination limits
     stmt = stmt.order_by(Record.id.desc())

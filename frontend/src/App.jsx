@@ -722,6 +722,10 @@ function App() {
       params.append('template', templateFilter);
     }
     
+    if (pipelineTagFilter && pipelineTagFilter !== 'all') {
+      params.append('pipeline_tag', pipelineTagFilter);
+    }
+    
     try {
       triggerToast("Generating Excel export...", "info");
       const res = await authFetch(`${API_BASE}/api/v1/records/export?${params.toString()}`);
@@ -2391,6 +2395,7 @@ function App() {
                 >
                   <option value="all">All Tags</option>
                   <option value="none">No Tag</option>
+                  <option value="pending">Pending</option>
                   <option value="Interested">Interested</option>
                   <option value="Not Interested">Not Interested</option>
                 </select>
@@ -2578,11 +2583,22 @@ function App() {
                     if (respLower === 'not interested') respBadge = 'badge-not-interested';
 
                     const tagVal = rec.pipeline_tag;
-                    const isMainTag = ['Contacted', 'Interested', 'Not Interested'].includes(tagVal);
+                    const parentResp = rec.parent_response;
                     let tagBadge = '';
-                    if (tagVal === 'Contacted') tagBadge = 'badge-tag-contacted';
-                    if (tagVal === 'Interested') tagBadge = 'badge-tag-interested';
-                    if (tagVal === 'Not Interested') tagBadge = 'badge-tag-not-interested';
+                    let tagText = '—';
+                    if (tagVal === 'Interested') {
+                      tagBadge = 'badge-interested';
+                      tagText = 'Interested';
+                    } else if (tagVal === 'Not Interested') {
+                      tagBadge = 'badge-not-interested';
+                      tagText = 'Not Interested';
+                    } else if (parentResp === 'Interested') {
+                      tagBadge = 'badge-pending';
+                      tagText = 'Pending';
+                    } else if (parentResp === 'Not Interested') {
+                      tagBadge = 'badge-not-interested';
+                      tagText = 'Not Interested';
+                    }
 
                     return (
                       <tr key={rec.id}>
@@ -2658,9 +2674,9 @@ function App() {
                           </span>
                         </td>
                         <td>
-                          {isMainTag ? (
+                          {tagText !== '—' ? (
                             <span className={`badge ${tagBadge}`}>
-                              {tagVal}
+                              {tagText}
                             </span>
                           ) : (
                             <span style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>—</span>
@@ -2761,9 +2777,10 @@ function App() {
                     <option value="all">All Chats</option>
                     <option value="unread">Unread</option>
                     <option value="unreplied">Unreplied</option>
+                    <option value="pending">Pending</option>
                     <option value="interested">Interested</option>
                     <option value="not_interested">Not Interested</option>
-                    <option value="no_tag">No Tag</option>
+                    <option value="no_response">No Response</option>
                   </select>
                 </div>
               </div>
@@ -2780,12 +2797,14 @@ function App() {
                     matchStatus = (chat.record.unread_count || 0) > 0;
                   } else if (chatStatusFilter === 'unreplied') {
                     matchStatus = lastMsg && lastMsg.sender === 'parent';
+                  } else if (chatStatusFilter === 'pending') {
+                    matchStatus = chat.record.parent_response === 'Interested' && (!chat.record.pipeline_tag || chat.record.pipeline_tag === 'Lead');
                   } else if (chatStatusFilter === 'interested') {
-                    matchStatus = chat.record.pipeline_tag === 'Interested' || chat.record.parent_response === 'Interested';
+                    matchStatus = chat.record.pipeline_tag === 'Interested';
                   } else if (chatStatusFilter === 'not_interested') {
                     matchStatus = chat.record.pipeline_tag === 'Not Interested' || chat.record.parent_response === 'Not Interested';
-                  } else if (chatStatusFilter === 'no_tag') {
-                    matchStatus = !chat.record.pipeline_tag || chat.record.pipeline_tag === 'Lead';
+                  } else if (chatStatusFilter === 'no_response') {
+                    matchStatus = (chat.record.parent_response === 'No Response' || !chat.record.parent_response) && (!chat.record.pipeline_tag || chat.record.pipeline_tag === 'Lead');
                   }
                   
                   return matchSearch && matchBranch && matchStatus;
@@ -2802,22 +2821,18 @@ function App() {
                   let tagBadge = '';
                   let tagText = '';
                   
-                  if (tagVal === 'Contacted') {
-                    showTag = true;
-                    tagBadge = 'badge-tag-contacted';
-                    tagText = 'Contacted';
-                  } else if (tagVal === 'Interested') {
-                    showTag = true;
-                    tagBadge = 'badge-tag-interested';
-                    tagText = 'Interested';
-                  } else if (tagVal === 'Not Interested') {
-                    showTag = true;
-                    tagBadge = 'badge-tag-not-interested';
-                    tagText = 'Not Interested';
-                  } else if (parentResp === 'Interested') {
+                  if (tagVal === 'Interested') {
                     showTag = true;
                     tagBadge = 'badge-interested';
                     tagText = 'Interested';
+                  } else if (tagVal === 'Not Interested') {
+                    showTag = true;
+                    tagBadge = 'badge-not-interested';
+                    tagText = 'Not Interested';
+                  } else if (parentResp === 'Interested') {
+                    showTag = true;
+                    tagBadge = 'badge-pending';
+                    tagText = 'Pending';
                   } else if (parentResp === 'Not Interested') {
                     showTag = true;
                     tagBadge = 'badge-not-interested';
