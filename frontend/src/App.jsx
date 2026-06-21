@@ -573,6 +573,7 @@ function App() {
   const fileInputRef = useRef(null);
   const searchTimeoutRef = useRef(null);
   const logsEndRef = useRef(null);
+  const chatBottomRef = useRef(null);
 
   // ----------------------------------------------------
   // LIFECYCLE & POLLING
@@ -582,6 +583,13 @@ function App() {
   useEffect(() => {
     pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter };
   }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter]);
+
+  // Auto-scroll to the bottom of chat messages whenever they update
+  useEffect(() => {
+    if (chatBottomRef.current) {
+      chatBottomRef.current.scrollIntoView({ behavior: 'instant' });
+    }
+  }, [chatHistory]);
 
   useEffect(() => {
     if (!token) return;
@@ -3047,6 +3055,8 @@ function App() {
                             <p>No messages in this chat yet.</p>
                           </div>
                         )}
+                        {/* Sentinel element — always at the bottom so we can scroll to it */}
+                        <div ref={chatBottomRef} style={{ height: 0 }} />
                       </div>
                       <div className="chat-input-area" style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '1rem', borderTop: '1px solid var(--border-color)', backgroundColor: '#ffffff' }}>
                         {!chatSession.active ? (
