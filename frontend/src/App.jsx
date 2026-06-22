@@ -1820,9 +1820,16 @@ function App() {
 
   return (
     <div className={`app-wrapper mobile-view-${mobileActiveSubView}`}>
+      {/* Backdrop overlay for mobile drawer */}
+      {isSidebarOpen && (
+        <div 
+          className="sidebar-backdrop"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
       {/* 1. Left Sidebar Navigation */}
       <aside 
-        className="app-sidebar"
+        className={`app-sidebar ${isSidebarOpen ? 'mobile-open' : ''}`}
         style={{ 
           width: isSidebarOpen ? '280px' : '72px',
           minWidth: isSidebarOpen ? '280px' : '72px',
@@ -2047,10 +2054,34 @@ function App() {
         
         {/* Header Title Bar */}
         <header className="dashboard-header">
-          <div className="header-titles">
-            <span className="header-meta">{header.meta}</span>
-            <h1>{header.title}</h1>
-            <p className="subtitle">{header.subtitle}</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', width: '100%' }}>
+            {/* Hamburger button on mobile */}
+            <button 
+              className="mobile-menu-toggle"
+              onClick={() => setIsSidebarOpen(true)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                padding: '0.25rem',
+                color: 'var(--text-primary)',
+                display: 'none',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              title="Open Navigation Menu"
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+              </svg>
+            </button>
+            <div className="header-titles">
+              <span className="header-meta">{header.meta}</span>
+              <h1>{header.title}</h1>
+              <p className="subtitle">{header.subtitle}</p>
+            </div>
           </div>
         </header>
 

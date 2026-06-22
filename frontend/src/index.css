@@ -1813,9 +1813,86 @@ body {
     display: inline-flex !important;
 }
 
+/* Sidebar Backdrop overlay for mobile drawer layout */
+.sidebar-backdrop {
+    display: none;
+}
+
 @media (max-width: 1024px) {
     .desktop-only-flex {
         display: none !important;
+    }
+    
+    /* Transform sidebar to a fixed sliding drawer */
+    .app-sidebar {
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+        bottom: 0 !important;
+        height: 100vh !important;
+        width: 280px !important;
+        min-width: 280px !important;
+        transform: translateX(-100%) !important;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        z-index: 1100 !important;
+        box-shadow: 5px 0 25px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    .app-sidebar.mobile-open {
+        transform: translateX(0) !important;
+    }
+    
+    .sidebar-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background-color: rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(2px);
+        z-index: 1050;
+        animation: fadeIn 0.2s ease-out;
+    }
+    
+    .mobile-menu-toggle {
+        display: flex !important;
+    }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@media (max-width: 768px) {
+    /* Optimize padding and font size for table cells on mobile */
+    .data-table th, 
+    .data-table td {
+        padding: 0.65rem 0.75rem !important;
+        font-size: 0.75rem !important;
+    }
+    
+    /* Hide non-critical columns on mobile view to prevent layout squishing */
+    .data-table th:nth-child(3), /* Parent Name */
+    .data-table td:nth-child(3),
+    .data-table th:nth-child(4), /* Selected Branch */
+    .data-table td:nth-child(4),
+    .data-table th:nth-child(5), /* Sent Template */
+    .data-table td:nth-child(5),
+    .data-table th:nth-child(9), /* Lead Status */
+    .data-table td:nth-child(9) {
+        display: none !important;
+    }
+    
+    /* Scale segmented pill navigation controls full-width */
+    .tab-navigation {
+        display: flex !important;
+        width: 100% !important;
+        align-self: stretch !important;
+    }
+    .tab-btn {
+        flex: 1 !important;
+        justify-content: center !important;
+        padding: 0.5rem 0.5rem !important;
+        font-size: 0.75rem !important;
     }
 }
 
