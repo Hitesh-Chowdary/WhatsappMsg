@@ -1309,15 +1309,63 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
       from { opacity: 0; transform: translateY(-10px); }
       to { opacity: 1; transform: translateY(0); }
     }
+
+    /* Responsive styles for FlowBuilder layout */
+    .flow-builder-container {
+      display: flex;
+      width: 100%;
+      height: calc(100vh - 120px);
+      gap: 1rem;
+      padding: 1rem;
+    }
+    .flow-canvas-wrapper {
+      flex-grow: 1;
+      position: relative;
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+    .flow-config-panel {
+      width: 360px;
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+    }
+
+    @media (max-width: 1024px) {
+      .flow-builder-container {
+        flex-direction: column !important;
+        height: auto !important;
+        min-height: calc(100vh - 120px) !important;
+        padding: 0.5rem !important;
+        gap: 0.75rem !important;
+      }
+      .flow-canvas-wrapper {
+        height: 400px !important;
+        min-height: 400px !important;
+        flex-grow: 0 !important;
+      }
+      .flow-config-panel {
+        width: 100% !important;
+        height: auto !important;
+        min-height: 400px !important;
+      }
+    }
   `;
 
   return (
     <>
       <style>{customStyles}</style>
-      <div style={{ display: 'flex', height: 'calc(100vh - 120px)', width: '100%', gap: '1rem', padding: '1rem' }}>
+      <div className="flow-builder-container">
         
         {/* 1. Sleek Single-Row Top Header Bar & Workspace Canvas Wrapper */}
-        <div style={{ flexGrow: 1, position: 'relative', borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+        <div className="flow-canvas-wrapper">
           
           {/* Top metadata header bar inside the canvas panel container */}
           <div style={{
@@ -1713,7 +1761,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
         </div>
 
         {/* 2. Right Configurator Sidebar */}
-        <div className="glass-panel" style={{ width: '360px', borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid #e2e8f0', background: '#ffffff' }}>
+        <div className="glass-panel flow-config-panel">
           
           {/* Tab Header Selector */}
           <div style={{ display: 'flex', borderBottom: '1px solid #cbd5e1', background: '#f8fafc' }}>

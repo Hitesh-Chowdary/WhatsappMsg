@@ -1834,7 +1834,7 @@ body {
         min-width: 280px !important;
         transform: translateX(-100%) !important;
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        z-index: 1100 !important;
+        z-index: 5100 !important;
         box-shadow: 5px 0 25px rgba(0, 0, 0, 0.15) !important;
     }
     
@@ -1848,7 +1848,7 @@ body {
         inset: 0;
         background-color: rgba(0, 0, 0, 0.4);
         backdrop-filter: blur(2px);
-        z-index: 1050;
+        z-index: 5000;
         animation: fadeIn 0.2s ease-out;
     }
     

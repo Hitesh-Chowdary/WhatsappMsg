@@ -34,9 +34,13 @@ function App() {
     try {
       const res = await fetch(url, { ...options, headers });
       if (res.status === 401) {
-        localStorage.removeItem('jwt_token');
-        setToken(null);
-        triggerToast("Session expired or unauthorized. Please log in.", "error");
+        if (localStorage.getItem('jwt_token')) {
+          localStorage.removeItem('jwt_token');
+          localStorage.removeItem('currentUser');
+          setToken(null);
+          setCurrentUser(null);
+          triggerToast("Session expired or unauthorized. Please log in.", "error");
+        }
       }
       return res;
     } catch (err) {
@@ -185,6 +189,12 @@ function App() {
   const [selectedChatTemplate, setSelectedChatTemplate] = useState('');
   const [forceFreeForm, setForceFreeForm] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const navigateToView = (viewName) => {
+    setActiveView(viewName);
+    if (window.innerWidth <= 1024) {
+      setIsSidebarOpen(false);
+    }
+  };
   const [reminders, setReminders] = useState([]);
 
   // Contacts State
@@ -1881,7 +1891,7 @@ function App() {
         <nav className="sidebar-menu" style={{ padding: isSidebarOpen ? '1.5rem 0.75rem' : '1.5rem 0.5rem' }}>
           <button 
             className={`sidebar-menu-item ${activeView === 'outreach' ? 'active' : ''}`}
-            onClick={() => setActiveView('outreach')}
+            onClick={() => navigateToView('outreach')}
             style={{ 
               justifyContent: isSidebarOpen ? 'flex-start' : 'center', 
               padding: isSidebarOpen ? '0.75rem 1rem' : '0.75rem 0' 
@@ -1894,10 +1904,10 @@ function App() {
             </svg>
             {isSidebarOpen && <span>Outreach Dashboard</span>}
           </button>
-
+ 
           <button 
             className={`sidebar-menu-item ${activeView === 'chat' ? 'active' : ''}`}
-            onClick={() => setActiveView('chat')}
+            onClick={() => navigateToView('chat')}
             style={{ 
               justifyContent: isSidebarOpen ? 'flex-start' : 'center', 
               padding: isSidebarOpen ? '0.75rem 1rem' : '0.75rem 0',
@@ -1935,10 +1945,10 @@ function App() {
               ) : null;
             })()}
           </button>
-
+ 
           <button 
             className={`sidebar-menu-item ${activeView === 'bot-builder' ? 'active' : ''}`}
-            onClick={() => setActiveView('bot-builder')}
+            onClick={() => navigateToView('bot-builder')}
             style={{ 
               justifyContent: isSidebarOpen ? 'flex-start' : 'center', 
               padding: isSidebarOpen ? '0.75rem 1rem' : '0.75rem 0' 
@@ -1952,10 +1962,10 @@ function App() {
             </svg>
             {isSidebarOpen && <span>Visual Bot Builder</span>}
           </button>
-
+ 
           <button 
             className={`sidebar-menu-item ${activeView === 'reminders' ? 'active' : ''}`}
-            onClick={() => setActiveView('reminders')}
+            onClick={() => navigateToView('reminders')}
             style={{ 
               justifyContent: isSidebarOpen ? 'flex-start' : 'center', 
               padding: isSidebarOpen ? '0.75rem 1rem' : '0.75rem 0',
@@ -1993,11 +2003,11 @@ function App() {
               </span>
             )}
           </button>
-
+ 
           <button 
             className={`sidebar-menu-item ${activeView === 'contacts' ? 'active' : ''}`}
             onClick={() => {
-              setActiveView('contacts');
+              navigateToView('contacts');
               setContactsPage(1);
               fetchContacts(1);
             }}
@@ -3625,9 +3635,11 @@ function App() {
             </div>
           </div>
 
-        <div style={{ display: activeView === 'bot-builder' ? 'block' : 'none', height: '100%', width: '100%' }}>
-          <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} activeView={activeView} />
-        </div>
+        {activeView === 'bot-builder' && (
+          <div style={{ height: '100%', width: '100%' }}>
+            <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} activeView={activeView} />
+          </div>
+        )}
 
         <div style={{ display: activeView === 'reminders' ? 'block' : 'none', height: '100%', width: '100%' }}>
           {/* Reminders Dashboard grid */}
