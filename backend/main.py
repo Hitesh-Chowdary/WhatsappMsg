@@ -1526,7 +1526,7 @@ async def process_webhook_event(
                 record_id=log.record_id,
                 sender="parent",
                 message_text=button_text,
-                message_id=f"qr_{message_id[:15]}"
+                message_id=f"qr_{message_id}"
             )
             db.add(chat_msg)
             
