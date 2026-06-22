@@ -1346,6 +1346,33 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
       background: #ffffff;
     }
 
+    /* Header Bar layout for FlowBuilder */
+    .flow-header-bar {
+      padding: 0.75rem 1.5rem;
+      border-bottom: 1px solid #cbd5e1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+      z-index: 10;
+      gap: 1rem;
+    }
+    .flow-header-selector {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: #f1f5f9;
+      padding: 2px 4px;
+      border-radius: 10px;
+      border: 1px solid #cbd5e1;
+    }
+    .flow-header-buttons {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
     @media (max-width: 1024px) {
       .flow-builder-container {
         flex-direction: column !important;
@@ -1364,6 +1391,22 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
         height: auto !important;
         min-height: 400px !important;
       }
+      .flow-header-bar {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        padding: 0.75rem 1rem !important;
+        gap: 0.75rem !important;
+      }
+      .flow-header-selector {
+        flex-wrap: wrap !important;
+        justify-content: space-between !important;
+        padding: 4px 8px !important;
+      }
+      .flow-header-buttons {
+        flex-wrap: wrap !important;
+        gap: 0.75rem !important;
+        justify-content: flex-start !important;
+      }
     }
   `;
 
@@ -1376,16 +1419,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
         <div className="flow-canvas-wrapper">
           
           {/* Top metadata header bar inside the canvas panel container */}
-          <div style={{
-            padding: '0.75rem 1.5rem',
-            borderBottom: '1px solid #cbd5e1',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            background: '#ffffff',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-            zIndex: 10
-          }}>
+          <div className="flow-header-bar">
             {/* Left section: Brand logo, page title */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <IconRobot />
@@ -1395,7 +1429,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
             </div>
 
             {/* Center section: Flow select selector and title rename widget */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: '#f1f5f9', padding: '2px 4px', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
+            <div className="flow-header-selector">
               <select 
                 value={currentFlow?.id === null ? 'new-draft' : (currentFlow?.id || 'new')}
                 onChange={async (e) => {
@@ -1513,7 +1547,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
             </div>
 
             {/* Right section: Auto-save status, toggle, publish active, save config */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div className="flow-header-buttons">
               {/* Auto-Save Status Banner */}
               {statusMessage ? (
                 <span style={{
