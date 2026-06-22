@@ -195,6 +195,22 @@ function App() {
       setIsSidebarOpen(false);
     }
   };
+
+  useEffect(() => {
+    const handleScrollLock = () => {
+      if (isSidebarOpen && window.innerWidth <= 1024) {
+        document.body.classList.add('sidebar-scroll-lock');
+      } else {
+        document.body.classList.remove('sidebar-scroll-lock');
+      }
+    };
+    handleScrollLock();
+    window.addEventListener('resize', handleScrollLock);
+    return () => {
+      document.body.classList.remove('sidebar-scroll-lock');
+      window.removeEventListener('resize', handleScrollLock);
+    };
+  }, [isSidebarOpen]);
   const [reminders, setReminders] = useState([]);
 
   // Contacts State

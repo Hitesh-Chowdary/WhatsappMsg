@@ -1897,4 +1897,12 @@ body {
     }
 }
 
+/* Bulletproof body scroll lock for mobile overlay drawers */
+body.sidebar-scroll-lock {
+    overflow: hidden !important;
+    position: fixed;
+    width: 100%;
+    height: 100%;
+}
+
 
