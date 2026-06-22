@@ -1588,7 +1588,7 @@ async def handle_quick_reply_auto_response(
     reply_text = None
     buttons = []
     
-    if bot_resp:
+    if bot_resp and bot_resp.get("source_keyword") not in ["default", "fallback"]:
         reply_text = bot_resp["reply_text"]
         buttons = bot_resp.get("buttons", [])
     else:
