@@ -517,6 +517,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
   // React Flow Viewport and Auto-Center States
   const [reactFlowInstance, setReactFlowInstance] = useState(null);
   const [loadCounter, setLoadCounter] = useState(0);
+  const [isReady, setIsReady] = useState(false);
 
   // Script Editor Panel States
   const [activeSidebarTab, setActiveSidebarTab] = useState('config'); // 'config' or 'script'
@@ -727,6 +728,13 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
   useEffect(() => {
     fetchFlows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsReady(true);
+    }, 450);
+    return () => clearTimeout(timer);
   }, []);
 
   // Detect semantic modifications (ignores React Flow transient states)
@@ -1731,7 +1739,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
               </button>
             </div>
 
-            {loading ? (
+            {loading || !isReady ? (
               <div style={{ display: 'flex', height: '100%', width: '100%', alignItems: 'center', justifyContent: 'center' }}>
                 <div className="spinner"></div>
               </div>
