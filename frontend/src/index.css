@@ -1830,13 +1830,14 @@ body {
         left: 0 !important;
         top: 0 !important;
         bottom: 0 !important;
-        height: 100vh !important;
+        height: 100% !important;
         width: 280px !important;
         min-width: 280px !important;
         transform: translateX(-100%) !important;
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
         z-index: 5100 !important;
         box-shadow: 5px 0 25px rgba(0, 0, 0, 0.15) !important;
+        overflow-y: auto !important;
     }
     
     .app-sidebar.mobile-open {
