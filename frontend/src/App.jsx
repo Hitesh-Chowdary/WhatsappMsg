@@ -3653,7 +3653,7 @@ function App() {
 
         {activeView === 'bot-builder' && (
           <div style={{ height: '100%', width: '100%' }}>
-            <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} activeView={activeView} />
+            <FlowBuilder authFetch={authFetch} API_BASE={API_BASE} activeView={activeView} templatesList={templatesList} />
           </div>
         )}
 

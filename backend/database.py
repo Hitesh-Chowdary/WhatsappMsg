@@ -28,6 +28,25 @@ engine_args = {
     "pool_recycle": 1800,
     "pool_pre_ping": True
 }
+
+# Handle sslmode parameter for asyncpg compatibility
+if DATABASE_URL and not DATABASE_URL.startswith("sqlite"):
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+    try:
+        parsed_url = urlparse(DATABASE_URL)
+        query_params = parse_qs(parsed_url.query)
+        if "sslmode" in query_params:
+            sslmode = query_params.pop("sslmode")[0]
+            new_query = urlencode(query_params, doseq=True)
+            parsed_url = parsed_url._replace(query=new_query)
+            DATABASE_URL = urlunparse(parsed_url)
+            
+            if sslmode in ["require", "prefer", "allow", "verify-ca", "verify-full"]:
+                engine_args["connect_args"] = {"ssl": True}
+    except Exception as e:
+        # Fallback to ignore errors in parsing
+        pass
+
 if not DATABASE_URL.startswith("sqlite"):
     engine_args["pool_size"] = 20
     engine_args["max_overflow"] = 10
@@ -247,6 +266,7 @@ class BotFlow(Base):
     name: Mapped[str] = mapped_column(String(255), default="Default Flow", server_default="Default Flow")
     flow_data: Mapped[dict] = mapped_column(JSON, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    template_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
         server_default=func.now(),
@@ -265,6 +285,7 @@ class BotFlow(Base):
             "name": self.name,
             "flow_data": self.flow_data,
             "is_active": self.is_active,
+            "template_name": self.template_name,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
@@ -286,6 +307,7 @@ async def init_db():
         await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'"))
         await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS pipeline_tag VARCHAR(50) DEFAULT 'Lead'"))
         await conn.execute(text("ALTER TABLE record_notes ADD COLUMN IF NOT EXISTS resolved BOOLEAN DEFAULT false"))
+        await conn.execute(text("ALTER TABLE bot_flows ADD COLUMN IF NOT EXISTS template_name VARCHAR(255)"))
         
     # Seed default templates if empty
     async with AsyncSessionLocal() as session:

@@ -485,7 +485,7 @@ const computeAutoLayout = (nodesList) => {
   return [...updatedTriggers, ...updatedMessages];
 };
 
-export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
+export default function FlowBuilder({ authFetch, API_BASE, activeView, templatesList = [] }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNode, setSelectedNode] = useState(null);
@@ -785,7 +785,8 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
         const payload = {
           name: currentFlow.name || 'Default Flow',
           flow_data: { nodes, edges },
-          is_active: currentFlow.is_active !== undefined ? currentFlow.is_active : false
+          is_active: currentFlow.is_active !== undefined ? currentFlow.is_active : false,
+          template_name: currentFlow.template_name || null
         };
         const res = await authFetch(`${API_BASE}/api/v1/bot/flows`, {
           method: 'POST',
@@ -916,6 +917,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
         name: currentFlow.name || 'Default Flow',
         flow_data: { nodes, edges },
         is_active: currentFlow.is_active !== undefined ? currentFlow.is_active : false,
+        template_name: currentFlow.template_name || null,
         ...overridePayload
       };
       
@@ -998,7 +1000,8 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
         ],
         edges: []
       },
-      is_active: false
+      is_active: false,
+      template_name: null
     };
     
     setCurrentFlow(newFlowObj);
@@ -1495,7 +1498,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
                 )}
                 {flowsList.map(f => (
                   <option key={f.id} value={f.id}>
-                    {f.name} {f.is_active ? '🟢 Active' : '⚪ Draft'}
+                    {f.name} {f.template_name ? `(${f.template_name})` : '(Global)'} {f.is_active ? '🟢 Active' : '⚪ Draft'}
                   </option>
                 ))}
                 <option value="new" style={{ color: '#4f46e5', fontWeight: '600' }}>+ Create New...</option>
@@ -1524,6 +1527,42 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView }) {
                 placeholder="Workflow Name"
                 title="Edit workflow name"
               />
+
+              <div style={{ width: '1px', height: '16px', backgroundColor: '#cbd5e1' }} />
+
+              <select
+                value={currentFlow?.template_name || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setCurrentFlow(prev => ({ ...prev, template_name: val || null }));
+                  setHasUnsavedChanges(true);
+                }}
+                className="custom-select"
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  fontWeight: '600',
+                  fontSize: '0.78rem',
+                  color: '#475569',
+                  padding: '0.35rem 1.5rem 0.35rem 0.6rem',
+                  cursor: 'pointer',
+                  outline: 'none',
+                  backgroundImage: "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E\")",
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 0.35rem center',
+                  backgroundSize: '0.8rem',
+                  appearance: 'none',
+                  WebkitAppearance: 'none'
+                }}
+                title="Link workflow to a campaign template"
+              >
+                <option value="">Global Default Flow</option>
+                {templatesList.map(t => (
+                  <option key={t.id} value={t.template_name}>
+                    Template: {t.template_name}
+                  </option>
+                ))}
+              </select>
 
               <div style={{ width: '1px', height: '16px', backgroundColor: '#cbd5e1' }} />
 

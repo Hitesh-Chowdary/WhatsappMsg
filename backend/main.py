@@ -86,6 +86,7 @@ class BotFlowPayload(BaseModel):
     name: str
     flow_data: dict
     is_active: Optional[bool] = True
+    template_name: Optional[str] = None
 
 class ContactCreatePayload(BaseModel):
     student_name: str
@@ -1583,7 +1584,7 @@ async def handle_quick_reply_auto_response(
         return
         
     # Check active BotFlow first
-    bot_resp = await get_bot_response(button_text, db)
+    bot_resp = await get_bot_response(button_text, db, template_name=record.sent_template)
     
     reply_text = None
     buttons = []
@@ -1694,22 +1695,16 @@ def match_keyword(keyword: str, text: str) -> bool:
     return False
 
 # Helper to process incoming text replies and trigger auto-responder
-async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict]:
+async def get_bot_response(message_text: str, db: AsyncSession, template_name: Optional[str] = None) -> Optional[dict]:
     """
     Checks if there is an active BotFlow and traverses it to find a matching response.
     Falls back to AutoReplyRules if no active BotFlow exists or no match is found in the flow.
     """
     normalized_text = message_text.lower().strip()
     
-    # 1. Check active BotFlow
-    stmt = select(BotFlow).where(BotFlow.is_active == True).limit(1)
-    res = await db.execute(stmt)
-    active_flow = res.scalars().first()
-    
-    if active_flow and active_flow.flow_data:
-        # Traverse BotFlow
-        nodes = active_flow.flow_data.get("nodes", [])
-        edges = active_flow.flow_data.get("edges", [])
+    def traverse_flow(flow_data: dict) -> Optional[dict]:
+        nodes = flow_data.get("nodes", [])
+        edges = flow_data.get("edges", [])
         
         # Find trigger node that matches the message text
         trigger_node = None
@@ -1752,8 +1747,34 @@ async def get_bot_response(message_text: str, db: AsyncSession) -> Optional[dict
                             "buttons": buttons,
                             "source_keyword": trigger_node.get("data", {}).get("keyword", "default")
                         }
-                        
-    # 2. Fallback to AutoReplyRules (Legacy)
+        return None
+
+    # 1. Check template-specific active BotFlow
+    if template_name:
+        tmpl_stmt = select(BotFlow).where(
+            BotFlow.is_active == True,
+            func.lower(BotFlow.template_name) == template_name.lower()
+        ).limit(1)
+        tmpl_res = await db.execute(tmpl_stmt)
+        active_flow = tmpl_res.scalars().first()
+        if active_flow and active_flow.flow_data:
+            res = traverse_flow(active_flow.flow_data)
+            if res:
+                return res
+                
+    # 2. Check active global BotFlow (where template_name is None or empty string)
+    global_stmt = select(BotFlow).where(
+        BotFlow.is_active == True,
+        or_(BotFlow.template_name == None, BotFlow.template_name == "")
+    ).limit(1)
+    global_res = await db.execute(global_stmt)
+    active_global_flow = global_res.scalars().first()
+    if active_global_flow and active_global_flow.flow_data:
+        res = traverse_flow(active_global_flow.flow_data)
+        if res:
+            return res
+            
+    # 3. Fallback to AutoReplyRules (Legacy)
     rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
     rules_res = await db.execute(rules_stmt)
     all_rules = rules_res.scalars().all()
@@ -1917,7 +1938,7 @@ async def handle_incoming_text_reply(
         await db.commit()
         return {"status": "success", "record_id": record.id}
         
-    response_data = await get_bot_response(message_text, db)
+    response_data = await get_bot_response(message_text, db, template_name=record.sent_template)
     
     # Check if incoming message is a standard greeting
     normalized_incoming = message_text.lower().strip()
@@ -3178,7 +3199,20 @@ async def save_bot_flow(
     """Saves or updates a bot flow. Automatically deactivates others if active is true."""
     if payload.is_active:
         from sqlalchemy import update
-        await db.execute(update(BotFlow).values(is_active=False))
+        if payload.template_name:
+            from sqlalchemy import func
+            await db.execute(
+                update(BotFlow)
+                .where(func.lower(BotFlow.template_name) == payload.template_name.lower())
+                .values(is_active=False)
+            )
+        else:
+            from sqlalchemy import or_
+            await db.execute(
+                update(BotFlow)
+                .where(or_(BotFlow.template_name == None, BotFlow.template_name == ""))
+                .values(is_active=False)
+            )
         
     stmt = select(BotFlow).where(BotFlow.name == payload.name)
     res = await db.execute(stmt)
@@ -3187,11 +3221,13 @@ async def save_bot_flow(
     if flow:
         flow.flow_data = payload.flow_data
         flow.is_active = payload.is_active if payload.is_active is not None else True
+        flow.template_name = payload.template_name
     else:
         flow = BotFlow(
             name=payload.name,
             flow_data=payload.flow_data,
-            is_active=payload.is_active if payload.is_active is not None else True
+            is_active=payload.is_active if payload.is_active is not None else True,
+            template_name=payload.template_name
         )
         db.add(flow)
         
