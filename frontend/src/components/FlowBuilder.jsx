@@ -1411,6 +1411,31 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
         justify-content: flex-start !important;
       }
     }
+
+    .flow-header-title-full {
+      display: inline-block;
+    }
+    .flow-header-title-short {
+      display: none;
+    }
+    
+    @media (max-width: 1400px) {
+      .flow-header-bar {
+        padding: 0.6rem 1rem !important;
+        gap: 0.75rem !important;
+      }
+      .flow-header-title-full {
+        display: none !important;
+      }
+      .flow-header-title-short {
+        display: inline-block !important;
+      }
+    }
+    @media (max-width: 1200px) {
+      .flow-header-title-short {
+        display: none !important;
+      }
+    }
   `;
 
   return (
@@ -1426,8 +1451,11 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
             {/* Left section: Brand logo, page title */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <IconRobot />
-              <span style={{ fontSize: '0.95rem', fontWeight: '800', letterSpacing: '-0.02em', color: '#0f172a', whiteSpace: 'nowrap' }}>
+              <span className="flow-header-title-full" style={{ fontSize: '0.95rem', fontWeight: '800', letterSpacing: '-0.02em', color: '#0f172a', whiteSpace: 'nowrap' }}>
                 Visual Auto-Bot Flow Builder
+              </span>
+              <span className="flow-header-title-short" style={{ fontSize: '0.95rem', fontWeight: '800', letterSpacing: '-0.02em', color: '#0f172a', whiteSpace: 'nowrap' }}>
+                Flow Builder
               </span>
             </div>
 
