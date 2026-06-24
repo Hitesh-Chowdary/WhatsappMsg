@@ -29,20 +29,26 @@ engine_args = {
     "pool_pre_ping": True
 }
 
-# Handle sslmode parameter for asyncpg compatibility
+# Handle sslmode and strip incompatible query parameters for asyncpg compatibility
 if DATABASE_URL and not DATABASE_URL.startswith("sqlite"):
-    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+    from urllib.parse import urlparse, parse_qs, urlunparse
     try:
         parsed_url = urlparse(DATABASE_URL)
         query_params = parse_qs(parsed_url.query)
+        
+        # Check if SSL is requested
+        has_ssl = False
         if "sslmode" in query_params:
-            sslmode = query_params.pop("sslmode")[0]
-            new_query = urlencode(query_params, doseq=True)
-            parsed_url = parsed_url._replace(query=new_query)
-            DATABASE_URL = urlunparse(parsed_url)
-            
+            sslmode = query_params.get("sslmode")[0]
             if sslmode in ["require", "prefer", "allow", "verify-ca", "verify-full"]:
-                engine_args["connect_args"] = {"ssl": True}
+                has_ssl = True
+        
+        if has_ssl or "ssl" in query_params or (parsed_url.hostname and "neon" in parsed_url.hostname):
+            engine_args["connect_args"] = {"ssl": True}
+            
+        # Completely strip query parameters to avoid unsupported arguments in asyncpg (e.g. channel_binding)
+        parsed_url = parsed_url._replace(query="")
+        DATABASE_URL = urlunparse(parsed_url)
     except Exception as e:
         # Fallback to ignore errors in parsing
         pass
