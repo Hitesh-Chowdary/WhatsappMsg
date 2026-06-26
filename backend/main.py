@@ -648,23 +648,33 @@ async def upload_records(
     added_count = 0
     updated_count = 0
     
+    record_ids_to_reset = []
     for record_data in records_to_process:
         phone = record_data["phone_number"]
         if phone in existing_records:
-            # Overwrite existing record and reset statuses for retry campaigns
+            # Overwrite existing record details
             rec = existing_records[phone]
             rec.student_name = record_data["student_name"]
             rec.parent_name = record_data["parent_name"]
             rec.selected_branch = record_data["selected_branch"]
             rec.variables = record_data["variables"]
-            rec.campaign_status = "Pending"
-            rec.delivery_status = "Unsent"
-            rec.parent_response = "No Response"
-            rec.message_id = None
-            rec.sent_at = None
-            rec.delivered_at = None
-            rec.read_at = None
-            rec.responded_at = None
+            
+            # Reset campaign statuses ONLY if the record has never been processed/sent
+            is_new_campaign = (
+                rec.delivery_status == "Unsent" or 
+                rec.campaign_status == "Pending" or 
+                (rec.delivery_status is None and rec.parent_response == "No Response")
+            )
+            if is_new_campaign:
+                rec.campaign_status = "Pending"
+                rec.delivery_status = "Unsent"
+                rec.parent_response = "No Response"
+                rec.message_id = None
+                rec.sent_at = None
+                rec.delivered_at = None
+                rec.read_at = None
+                rec.responded_at = None
+                record_ids_to_reset.append(rec.id)
             updated_count += 1
         else:
             # Create a brand new record
@@ -680,10 +690,8 @@ async def upload_records(
             )
             db.add(rec)
             added_count += 1
-    # Delete existing campaign logs for these records to reset stats for fresh campaigns
-    stmt = select(Record.id).where(Record.phone_number.in_(phone_numbers))
-    res = await db.execute(stmt)
-    record_ids_to_reset = res.scalars().all()
+            
+    # Delete existing campaign logs ONLY for records that were reset
     if record_ids_to_reset:
         from database import CampaignLog
         from sqlalchemy import delete
@@ -2070,10 +2078,17 @@ async def handle_incoming_text_reply(
         )
         db.add(auto_chat_msg)
         
+        # Determine if they started the chat themselves (no campaign outreach template sent)
+        is_user_initiated = (not record.sent_template or record.selected_branch == "Direct Inquiry")
+
         # Update record response state
         old_parent_response = record.parent_response
         if record.parent_response != "Counselor Needed":
-            record.parent_response = normalize_parent_response(source_keyword)
+            normalized_val = normalize_parent_response(source_keyword)
+            if is_user_initiated:
+                record.parent_response = "Not Interested" if normalized_val == "Not Interested" else "No Response"
+            else:
+                record.parent_response = normalized_val
         record.responded_at = datetime.utcnow()
         
         # Auto-tag based on parent response transitions
@@ -2087,7 +2102,11 @@ async def handle_incoming_text_reply(
         # Mirror updates to latest CampaignLog if it exists
         if latest_log:
             if latest_log.parent_response != "Counselor Needed":
-                latest_log.parent_response = normalize_parent_response(source_keyword)
+                normalized_val = normalize_parent_response(source_keyword)
+                if is_user_initiated:
+                    latest_log.parent_response = "Not Interested" if normalized_val == "Not Interested" else "No Response"
+                else:
+                    latest_log.parent_response = normalized_val
             latest_log.responded_at = record.responded_at
             latest_log.delivery_status = "Read"
 

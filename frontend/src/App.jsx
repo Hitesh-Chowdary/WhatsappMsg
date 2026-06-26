@@ -86,6 +86,8 @@ function App() {
   const handleLogout = () => {
     localStorage.removeItem('jwt_token');
     localStorage.removeItem('currentUser');
+    localStorage.removeItem('activeView');
+    localStorage.removeItem('activeChatRecordId');
     setToken(null);
     setCurrentUser(null);
     setLoginUsername('');
@@ -167,9 +169,14 @@ function App() {
 
 
   // Chat State
-  const [activeView, setActiveView] = useState('outreach'); // 'outreach' or 'chat'
+  const [activeView, setActiveView] = useState(() => {
+    return localStorage.getItem('activeView') || 'outreach';
+  });
   const [chatsList, setChatsList] = useState([]);
-  const [activeChatRecordId, setActiveChatRecordId] = useState(null);
+  const [activeChatRecordId, setActiveChatRecordId] = useState(() => {
+    const saved = localStorage.getItem('activeChatRecordId');
+    return saved ? parseInt(saved) : null;
+  });
   const [chatHistory, setChatHistory] = useState([]);
   const [typedMessage, setTypedMessage] = useState('');
   const [chatSearchText, setChatSearchText] = useState('');
@@ -398,6 +405,9 @@ function App() {
         setChatsList(prev => prev.map(c => 
           c.record.id === recordId ? { ...c, record: { ...c.record, unread_count: 0 } } : c
         ));
+      } else {
+        setActiveChatRecordId(null);
+        setChatHistory([]);
       }
     } catch (err) {
       console.error("Error fetching chat history:", err);
@@ -479,6 +489,7 @@ function App() {
       const data = await res.json();
       if (res.ok) {
         setTypedMessage('');
+        forceScrollRef.current = true;
         setChatHistory(prev => [...prev, data.message]);
         fetchRecentChats();
       } else {
@@ -507,6 +518,7 @@ function App() {
       const data = await res.json();
       if (res.ok) {
         setSelectedChatTemplate('');
+        forceScrollRef.current = true;
         setChatHistory(prev => [...prev, data.message]);
         setForceFreeForm(false);
         fetchRecentChats();
@@ -635,6 +647,9 @@ function App() {
   const searchTimeoutRef = useRef(null);
   const logsEndRef = useRef(null);
   const chatBottomRef = useRef(null);
+  const chatContainerRef = useRef(null);
+  const prevActiveChatRecordIdRef = useRef(null);
+  const forceScrollRef = useRef(false);
 
   // ----------------------------------------------------
   // LIFECYCLE & POLLING
@@ -645,12 +660,44 @@ function App() {
     pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter };
   }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter]);
 
-  // Auto-scroll to the bottom of chat messages whenever they update
+  // Auto-scroll to the bottom of chat messages intelligently
   useEffect(() => {
-    if (chatBottomRef.current) {
-      chatBottomRef.current.scrollIntoView({ behavior: 'instant' });
+    if (!activeChatRecordId) {
+      prevActiveChatRecordIdRef.current = null;
+      return;
     }
-  }, [chatHistory]);
+
+    const container = chatContainerRef.current;
+    const isNewChat = prevActiveChatRecordIdRef.current !== activeChatRecordId;
+    prevActiveChatRecordIdRef.current = activeChatRecordId;
+
+    if (container) {
+      // Determine if the user was already scrolled to the bottom (within a threshold)
+      const threshold = 120; // Allow 120px buffer
+      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+
+      if (isNewChat || isNearBottom || forceScrollRef.current) {
+        if (chatBottomRef.current) {
+          chatBottomRef.current.scrollIntoView({ behavior: 'instant' });
+        }
+        forceScrollRef.current = false;
+      }
+    }
+  }, [chatHistory, activeChatRecordId]);
+
+  // Sync activeView to localStorage
+  useEffect(() => {
+    localStorage.setItem('activeView', activeView);
+  }, [activeView]);
+
+  // Sync activeChatRecordId to localStorage
+  useEffect(() => {
+    if (activeChatRecordId !== null) {
+      localStorage.setItem('activeChatRecordId', activeChatRecordId);
+    } else {
+      localStorage.removeItem('activeChatRecordId');
+    }
+  }, [activeChatRecordId]);
 
   useEffect(() => {
     if (!token) return;
@@ -3401,7 +3448,7 @@ function App() {
 
                   {activeChatSubTab === 'chat' ? (
                     <>
-                      <div className="chat-messages-area">
+                      <div className="chat-messages-area" ref={chatContainerRef}>
                         {chatHistory.map((msg, index) => {
                           const bubbleClass = msg.sender === 'parent' ? 'parent' : msg.sender === 'counselor' ? 'counselor' : 'system';
                           const senderLabel = msg.sender === 'parent' ? 'Student/Parent' : msg.sender === 'counselor' ? 'Counselor' : 'Bot / Outreach';
