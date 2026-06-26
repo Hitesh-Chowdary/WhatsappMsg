@@ -54,13 +54,6 @@ const IconTrash = () => (
   </svg>
 );
 
-const IconPublish = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
-    <path d="M4.5 16.5c-1.5 1.26-2 2.5-2 3.5 1-.5 2.5-1 3.5-2" />
-    <path d="M12 12l9-9-9 9z" />
-    <path d="M21 3l-6.5 18a.5.5 0 0 1-.9 0L10 14l-7-3.5c-.2-.1-.2-.4 0-.5L21 3z" />
-  </svg>
-);
 
 const IconSave = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
@@ -1059,26 +1052,17 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
     }
   };
 
-  const handlePublishFlow = async () => {
-    if (!currentFlow) return;
-    if (currentFlow.id === null || hasUnsavedChanges) {
-      const confirmed = await showConfirm(
-        "Save and Publish",
-        "You need to save the current changes before publishing. Save and publish now?"
-      );
-      if (confirmed) {
-        await saveFlowConfig({ is_active: true });
-      }
-      return;
-    }
-    
+
+  const handleToggleFlowActive = async (flow, isActive) => {
+    if (!flow) return;
     setSaving(true);
-    setStatusMessage('Publishing workflow... 🚀');
+    setStatusMessage(isActive ? 'Activating flow... 🚀' : 'Deactivating flow... ⏸️');
     try {
       const payload = {
-        name: currentFlow.name,
-        flow_data: { nodes, edges },
-        is_active: true
+        name: flow.name,
+        flow_data: flow.flow_data,
+        template_name: flow.template_name,
+        is_active: isActive
       };
       const res = await authFetch(`${API_BASE}/api/v1/bot/flows`, {
         method: 'POST',
@@ -1086,21 +1070,79 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
         body: JSON.stringify(payload)
       });
       if (res && res.ok) {
-        const result = await res.json();
-        setStatusMessage('Workflow published successfully! 🚀');
-        setHasUnsavedChanges(false);
-        comparisonRef.current = getCleanComparisonString(nodes, edges);
-        await fetchFlows(result.flow.id);
+        await res.json();
+        setStatusMessage(isActive ? 'Flow activated successfully! 🚀' : 'Flow deactivated successfully! ⏸️');
+        await fetchFlows(currentFlow?.id || flow.id);
       } else {
-        setStatusMessage('Failed to publish workflow.');
+        setStatusMessage('Failed to update flow active status.');
       }
     } catch (e) {
       console.error(e);
       setStatusMessage('Error connecting to server.');
     } finally {
       setSaving(false);
-      setTimeout(() => setStatusMessage(''), 4000);
+      setTimeout(() => setStatusMessage(''), 3000);
     }
+  };
+
+  const handleAssignFlowToTemplate = async (flow, templateName, isActive) => {
+    if (!flow) return;
+    setSaving(true);
+    setStatusMessage(`Assigning "${flow.name}"... 🔄`);
+    try {
+      const payload = {
+        name: flow.name,
+        flow_data: flow.flow_data,
+        template_name: templateName || null,
+        is_active: isActive
+      };
+      const res = await authFetch(`${API_BASE}/api/v1/bot/flows`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res && res.ok) {
+        await res.json();
+        setStatusMessage(`Successfully assigned & activated "${flow.name}"! 🚀`);
+        await fetchFlows(currentFlow?.id || flow.id);
+      } else {
+        setStatusMessage('Failed to assign flow template.');
+      }
+    } catch (e) {
+      console.error(e);
+      setStatusMessage('Error connecting to server.');
+    } finally {
+      setSaving(false);
+      setTimeout(() => setStatusMessage(''), 3000);
+    }
+  };
+
+  const handleLoadFlowIntoCanvas = async (flow) => {
+    if (!flow) return;
+    if (hasUnsavedChanges) {
+      if (autoSaveEnabled) {
+        setStatusMessage('Saving current flow changes before switching... 🔄');
+        await saveFlowConfig();
+      } else {
+        const confirmed = await showConfirm(
+          "Discard Unsaved Changes",
+          "You have unsaved changes. Are you sure you want to switch workflows?",
+          true
+        );
+        if (!confirmed) return;
+      }
+    }
+    setCurrentFlow(flow);
+    setNodes(flow.flow_data?.nodes || []);
+    setEdges(flow.flow_data?.edges || []);
+    comparisonRef.current = getCleanComparisonString(flow.flow_data?.nodes || [], flow.flow_data?.edges || []);
+    setHasUnsavedChanges(false);
+    setPast([]);
+    setFuture([]);
+    setSelectedNode(null);
+    setLoadCounter(prev => prev + 1);
+    setScriptText(generateScriptFromFlow(flow.flow_data?.nodes || [], flow.flow_data?.edges || []));
+    setActiveSidebarTab('config'); // Switch to config panel
   };
 
   const handleButtonChange = (index, val) => {
@@ -1360,6 +1402,27 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
       box-shadow: 0 1px 3px rgba(0,0,0,0.02);
       z-index: 10;
       gap: 1rem;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .flow-header-bar::-webkit-scrollbar {
+      height: 4px;
+    }
+    .flow-header-bar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .flow-header-bar::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    .flow-header-bar::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    .flow-header-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-shrink: 0;
     }
     .flow-header-selector {
       display: flex;
@@ -1369,11 +1432,13 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
       padding: 2px 4px;
       border-radius: 10px;
       border: 1px solid #cbd5e1;
+      flex-shrink: 0;
     }
     .flow-header-buttons {
       display: flex;
       align-items: center;
       gap: 1rem;
+      flex-shrink: 0;
     }
 
     @media (max-width: 1024px) {
@@ -1449,7 +1514,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
           {/* Top metadata header bar inside the canvas panel container */}
           <div className="flow-header-bar">
             {/* Left section: Brand logo, page title */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div className="flow-header-brand">
               <IconRobot />
               <span className="flow-header-title-full" style={{ fontSize: '0.95rem', fontWeight: '800', letterSpacing: '-0.02em', color: '#0f172a', whiteSpace: 'nowrap' }}>
                 Visual Auto-Bot Flow Builder
@@ -1524,11 +1589,14 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                 {currentFlow?.id === null && (
                   <option value="new-draft">{currentFlow.name} * (Draft)</option>
                 )}
-                {flowsList.map(f => (
-                  <option key={f.id} value={f.id}>
-                    {f.name} {f.template_name ? `(${f.template_name})` : '(Global)'} {f.is_active ? '🟢 Active' : '⚪ Draft'}
-                  </option>
-                ))}
+                {flowsList.map(f => {
+                  const displayName = (currentFlow && f.id === currentFlow.id) ? currentFlow.name : f.name;
+                  return (
+                    <option key={f.id} value={f.id}>
+                      {displayName} {f.template_name ? `(${f.template_name})` : '(Global)'} {f.is_active ? '🟢 Active' : '⚪ Draft'}
+                    </option>
+                  );
+                })}
                 <option value="new" style={{ color: '#4f46e5', fontWeight: '600' }}>+ Create New...</option>
               </select>
 
@@ -1555,42 +1623,6 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                 placeholder="Workflow Name"
                 title="Edit workflow name"
               />
-
-              <div style={{ width: '1px', height: '16px', backgroundColor: '#cbd5e1' }} />
-
-              <select
-                value={currentFlow?.template_name || ''}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setCurrentFlow(prev => ({ ...prev, template_name: val || null }));
-                  setHasUnsavedChanges(true);
-                }}
-                className="custom-select"
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  fontWeight: '600',
-                  fontSize: '0.78rem',
-                  color: '#475569',
-                  padding: '0.35rem 1.5rem 0.35rem 0.6rem',
-                  cursor: 'pointer',
-                  outline: 'none',
-                  backgroundImage: "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E\")",
-                  backgroundRepeat: 'no-repeat',
-                  backgroundPosition: 'right 0.35rem center',
-                  backgroundSize: '0.8rem',
-                  appearance: 'none',
-                  WebkitAppearance: 'none'
-                }}
-                title="Link workflow to a campaign template"
-              >
-                <option value="">Global Default Flow</option>
-                {templatesList.map(t => (
-                  <option key={t.id} value={t.template_name}>
-                    Template: {t.template_name}
-                  </option>
-                ))}
-              </select>
 
               <div style={{ width: '1px', height: '16px', backgroundColor: '#cbd5e1' }} />
 
@@ -1706,44 +1738,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                 </button>
               )}
 
-              {/* Publish Button / Active Badge */}
-              {currentFlow?.is_active ? (
-                <span style={{
-                  fontSize: '0.75rem',
-                  color: '#059669',
-                  background: '#ecfdf5',
-                  border: '1px solid #a7f3d0',
-                  padding: '0.35rem 0.75rem',
-                  borderRadius: '8px',
-                  fontWeight: '600',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.35rem',
-                  height: '32px'
-                }}>
-                  <span className="pulse-dot" style={{ width: '6px', height: '6px', backgroundColor: '#10b981', borderRadius: '50%', display: 'inline-block' }}></span>
-                  Live Active
-                </span>
-              ) : (
-                <button 
-                  className="premium-btn premium-btn-primary" 
-                  onClick={handlePublishFlow}
-                  style={{
-                    height: '32px',
-                    padding: '0.3rem 0.75rem',
-                    fontSize: '0.78rem',
-                    background: 'linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%)',
-                    boxShadow: '0 2px 4px rgba(79, 70, 229, 0.15)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.35rem'
-                  }}
-                  title="Make this flow active for the chatbot webhook"
-                >
-                  <IconPublish />
-                  <span>Publish Active</span>
-                </button>
-              )}
+
             </div>
           </div>
 
@@ -1911,10 +1906,27 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
             >
               📝 Script Editor
             </button>
+            <button
+              onClick={() => setActiveSidebarTab('mappings')}
+              style={{
+                flex: 1,
+                padding: '0.75rem 0.5rem',
+                border: 'none',
+                background: activeSidebarTab === 'mappings' ? '#ffffff' : 'transparent',
+                borderBottom: activeSidebarTab === 'mappings' ? '2px solid #4f46e5' : 'none',
+                color: activeSidebarTab === 'mappings' ? '#4f46e5' : '#475569',
+                fontWeight: '600',
+                fontSize: '0.78rem',
+                cursor: 'pointer',
+                transition: 'all 0.15s'
+              }}
+            >
+              🗺️ Mappings
+            </button>
           </div>
 
           <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.85rem', flexGrow: 1, overflowY: 'auto' }}>
-            {activeSidebarTab === 'config' ? (
+            {activeSidebarTab === 'config' && (
               selectedNode ? (
                 <>
                   <div style={{ fontSize: '0.75rem', padding: '0.5rem 0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2024,7 +2036,9 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                   <div>No node selected. Click any node on the canvas to configure settings.</div>
                 </div>
               )
-            ) : (
+            )}
+
+            {activeSidebarTab === 'script' && (
               /* Script Editor Tab Content */
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
                 <div style={{ fontSize: '0.68rem', color: '#64748b', lineHeight: '1.4', background: '#f8fafc', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
@@ -2081,6 +2095,238 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                 >
                   <span>Sync to Canvas ⚡</span>
                 </button>
+              </div>
+            )}
+
+            {activeSidebarTab === 'mappings' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                {/* 1. Visual routing guide card explaining the priority path */}
+                <div style={{
+                  fontSize: '0.72rem',
+                  color: '#1e293b',
+                  background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+                  border: '1px solid #bfdbfe',
+                  padding: '0.85rem',
+                  borderRadius: '12px',
+                  lineHeight: '1.45'
+                }}>
+                  <strong style={{ color: '#1e40af', display: 'block', fontSize: '0.8rem', marginBottom: '0.4rem' }}>
+                    🗺️ Chatbot Routing Map
+                  </strong>
+                  <p style={{ marginBottom: '0.75rem', color: '#1e3a8a' }}>
+                    When a student replies, the chatbot decides which flow to run using this priority path:
+                  </p>
+                  
+                  {/* Visual Stepper / Flowchart */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(255, 255, 255, 0.5)', padding: '0.6rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.5)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '18px', height: '18px', background: '#3b82f6', color: '#ffffff', borderRadius: '50%', fontSize: '0.65rem', fontWeight: 'bold' }}>1</span>
+                      <strong style={{ color: '#1e293b' }}>Template Flow</strong>
+                      <span style={{ fontSize: '0.65rem', color: '#64748b' }}>(First)</span>
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: '#475569', marginLeft: '1.4rem', borderLeft: '2px solid #3b82f6', paddingLeft: '0.5rem', paddingBottom: '0.25rem' }}>
+                      Checks if there is an active flow matching the contact's last template (e.g. <code>parent_outreach</code>).
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '18px', height: '18px', background: '#8b5cf6', color: '#ffffff', borderRadius: '50%', fontSize: '0.65rem', fontWeight: 'bold' }}>2</span>
+                      <strong style={{ color: '#1e293b' }}>Global Default</strong>
+                      <span style={{ fontSize: '0.65rem', color: '#64748b' }}>(Fallback)</span>
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: '#475569', marginLeft: '1.4rem', borderLeft: '2px solid #8b5cf6', paddingLeft: '0.5rem', paddingBottom: '0.25rem' }}>
+                      If no template flow is set, runs the <code>Global Default Flow</code>.
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '18px', height: '18px', background: '#64748b', color: '#ffffff', borderRadius: '50%', fontSize: '0.65rem', fontWeight: 'bold' }}>3</span>
+                      <strong style={{ color: '#1e293b' }}>Keyword Rules</strong>
+                      <span style={{ fontSize: '0.65rem', color: '#64748b' }}>(Final)</span>
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: '#475569', marginLeft: '1.4rem', paddingLeft: '0.5rem' }}>
+                      If neither matches, falls back to legacy keyword Auto-Reply Rules.
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. List of template/global entries */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.25rem' }}>
+                  
+                  {/* Row for Global Default Flow */}
+                  <div style={{
+                    background: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    padding: '0.75rem',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <span style={{ fontWeight: '700', fontSize: '0.8rem', color: '#0f172a' }}>Global Default Flow</span>
+                      {(() => {
+                        const activeGlobal = flowsList.find(f => f.is_active && (!f.template_name || f.template_name === ""));
+                        return activeGlobal ? (
+                          <span style={{ fontSize: '0.68rem', color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '1px 6px', borderRadius: '4px', fontWeight: '600' }}>
+                            🟢 Active
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '0.68rem', color: '#64748b', background: '#f1f5f9', border: '1px solid #cbd5e1', padding: '1px 6px', borderRadius: '4px', fontWeight: '500' }}>
+                            ⚪ Inactive
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    
+                    {/* Select flow for Global */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: '600' }}>Assigned Flow:</span>
+                        <select
+                          value={(() => {
+                            const activeGlobal = flowsList.find(f => f.is_active && (!f.template_name || f.template_name === ""));
+                            return activeGlobal ? activeGlobal.id : '';
+                          })()}
+                          onChange={async (e) => {
+                            const val = e.target.value;
+                            if (!val) {
+                              // Deactivate active global if there is one
+                              const activeGlobal = flowsList.find(f => f.is_active && (!f.template_name || f.template_name === ""));
+                              if (activeGlobal) {
+                                await handleToggleFlowActive(activeGlobal, false);
+                              }
+                            } else {
+                              const flowObj = flowsList.find(f => f.id === parseInt(val));
+                              if (flowObj) {
+                                await handleAssignFlowToTemplate(flowObj, null, true);
+                              }
+                            }
+                          }}
+                          className="premium-input"
+                          style={{ width: '100%', padding: '0.35rem 0.5rem', fontSize: '0.75rem', height: '32px', border: '1px solid #cbd5e1', borderRadius: '6px', background: '#ffffff', outline: 'none' }}
+                        >
+                          <option value="">-- No Active Flow (None) --</option>
+                          {flowsList.map(f => {
+                            const displayName = (currentFlow && f.id === currentFlow.id) ? currentFlow.name : f.name;
+                            return (
+                              <option key={f.id} value={f.id}>{displayName}</option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                      {(() => {
+                        const activeGlobal = flowsList.find(f => f.is_active && (!f.template_name || f.template_name === ""));
+                        return activeGlobal ? (
+                          <div style={{ display: 'flex', gap: '0.4rem' }}>
+                            <button
+                              className="premium-btn"
+                              style={{ flex: 1, padding: '0.35rem', fontSize: '0.7rem', height: '28px', border: '1px solid #fca5a5', color: '#dc2626', background: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.2rem' }}
+                              onClick={() => handleToggleFlowActive(activeGlobal, false)}
+                            >
+                              Deactivate
+                            </button>
+                            <button
+                              className="premium-btn"
+                              style={{ flex: 1, padding: '0.35rem', fontSize: '0.7rem', height: '28px', border: '1px solid #bfdbfe', color: '#2563eb', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.2rem' }}
+                              onClick={() => handleLoadFlowIntoCanvas(activeGlobal)}
+                            >
+                              Edit Canvas ✏️
+                            </button>
+                          </div>
+                        ) : null;
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Divider */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0.25rem 0' }}>
+                    <div style={{ height: '1px', backgroundColor: '#e2e8f0', flexGrow: 1 }} />
+                    <span style={{ fontSize: '0.65rem', fontWeight: '600', color: '#94a3b8', textTransform: 'uppercase' }}>Templates</span>
+                    <div style={{ height: '1px', backgroundColor: '#e2e8f0', flexGrow: 1 }} />
+                  </div>
+
+                  {/* List of Templates from templatesList */}
+                  {templatesList.length === 0 ? (
+                    <div style={{ fontSize: '0.7rem', color: '#64748b', fontStyle: 'italic', textAlign: 'center', padding: '0.5rem' }}>
+                      No templates synced from Meta.
+                    </div>
+                  ) : (
+                    templatesList.map(t => {
+                      const activeFlow = flowsList.find(f => f.is_active && f.template_name?.toLowerCase() === t.template_name?.toLowerCase());
+                      return (
+                        <div key={t.id} style={{
+                          background: '#ffffff',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '8px',
+                          padding: '0.75rem',
+                          boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <span style={{ fontWeight: '700', fontSize: '0.8rem', color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }} title={t.template_name}>
+                              {t.template_name}
+                            </span>
+                            {activeFlow ? (
+                              <span style={{ fontSize: '0.68rem', color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '1px 6px', borderRadius: '4px', fontWeight: '600' }}>
+                                🟢 Active
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '0.68rem', color: '#64748b', background: '#f1f5f9', border: '1px solid #cbd5e1', padding: '1px 6px', borderRadius: '4px', fontWeight: '500' }}>
+                                ⚪ Fallback to Global
+                              </span>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: '600' }}>Assigned Flow:</span>
+                              <select
+                                value={activeFlow ? activeFlow.id : ''}
+                                onChange={async (e) => {
+                                  const val = e.target.value;
+                                  if (!val) {
+                                    if (activeFlow) {
+                                      await handleToggleFlowActive(activeFlow, false);
+                                    }
+                                  } else {
+                                    const flowObj = flowsList.find(f => f.id === parseInt(val));
+                                    if (flowObj) {
+                                      await handleAssignFlowToTemplate(flowObj, t.template_name, true);
+                                    }
+                                  }
+                                }}
+                                className="premium-input"
+                                style={{ width: '100%', padding: '0.35rem 0.5rem', fontSize: '0.75rem', height: '32px', border: '1px solid #cbd5e1', borderRadius: '6px', background: '#ffffff', outline: 'none' }}
+                              >
+                                <option value="">-- Fallback to Global (None) --</option>
+                                {flowsList.map(f => {
+                                  const displayName = (currentFlow && f.id === currentFlow.id) ? currentFlow.name : f.name;
+                                  return (
+                                    <option key={f.id} value={f.id}>{displayName}</option>
+                                  );
+                                })}
+                              </select>
+                            </div>
+                            {activeFlow && (
+                              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                <button
+                                  className="premium-btn"
+                                  style={{ flex: 1, padding: '0.35rem', fontSize: '0.7rem', height: '28px', border: '1px solid #fca5a5', color: '#dc2626', background: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.2rem' }}
+                                  onClick={() => handleToggleFlowActive(activeFlow, false)}
+                                >
+                                  Deactivate
+                                </button>
+                                <button
+                                  className="premium-btn"
+                                  style={{ flex: 1, padding: '0.35rem', fontSize: '0.7rem', height: '28px', border: '1px solid #bfdbfe', color: '#2563eb', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.2rem' }}
+                                  onClick={() => handleLoadFlowIntoCanvas(activeFlow)}
+                                >
+                                  Edit Canvas ✏️
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             )}
           </div>
