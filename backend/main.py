@@ -386,7 +386,9 @@ app = FastAPI(
     title="College Admission Automation Engine",
     description="Backend routing and webhook processing pipelines.",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None, # Disable Swagger UI to prevent endpoint leaks
+    redoc_url=None # Disable ReDoc UI
 )
 
 # Enable CORS for external/local testing
