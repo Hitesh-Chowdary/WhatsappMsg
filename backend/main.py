@@ -1598,10 +1598,12 @@ async def handle_quick_reply_auto_response(
     
     reply_text = None
     buttons = []
+    media_url = None
     
     if bot_resp and bot_resp.get("source_keyword") not in ["default", "fallback"]:
         reply_text = bot_resp["reply_text"]
         buttons = bot_resp.get("buttons", [])
+        media_url = bot_resp.get("media_url")
     else:
         # Search for matching Auto-Reply rule
         rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
@@ -1662,12 +1664,14 @@ async def handle_quick_reply_auto_response(
             response = await whatsapp_client.send_interactive_message(
                 to_phone=record.phone_number,
                 message_text=reply_text,
-                buttons=buttons
+                buttons=buttons,
+                media_url=media_url
             )
         else:
             response = await whatsapp_client.send_free_form_message(
                 to_phone=record.phone_number,
-                message_text=reply_text
+                message_text=reply_text,
+                media_url=media_url
             )
             
         # Save auto-reply in chat history as system sender
@@ -1676,6 +1680,7 @@ async def handle_quick_reply_auto_response(
             record_id=record.id,
             sender="system",
             message_text=reply_text,
+            media_url=media_url,
             message_id=auto_msg_id
         )
         db.add(auto_chat_msg)
@@ -1752,9 +1757,11 @@ async def get_bot_response(message_text: str, db: AsyncSession, template_name: O
                         buttons = data.get("buttons", [])
                         # Strip empty buttons
                         buttons = [b.strip() for b in buttons if b and b.strip()]
+                        media_url = data.get("mediaUrl") or data.get("media_url") or None
                         return {
                             "reply_text": reply_text,
                             "buttons": buttons,
+                            "media_url": media_url,
                             "source_keyword": trigger_node.get("data", {}).get("keyword", "default")
                         }
         return None
@@ -1802,6 +1809,7 @@ async def get_bot_response(message_text: str, db: AsyncSession, template_name: O
         return {
             "reply_text": matched_rule.reply_text,
             "buttons": [],
+            "media_url": None,
             "source_keyword": matched_rule.keyword
         }
         
@@ -2028,6 +2036,7 @@ async def handle_incoming_text_reply(
     if response_data:
         reply_text = response_data["reply_text"]
         buttons = response_data.get("buttons", [])
+        media_url = response_data.get("media_url")
         source_keyword = response_data["source_keyword"]
         
         # Compile dynamic placeholders from database record fields
@@ -2062,12 +2071,14 @@ async def handle_incoming_text_reply(
             response = await whatsapp_client.send_interactive_message(
                 to_phone=from_phone,
                 message_text=reply_text,
-                buttons=buttons
+                buttons=buttons,
+                media_url=media_url
             )
         else:
             response = await whatsapp_client.send_free_form_message(
                 to_phone=from_phone,
-                message_text=reply_text
+                message_text=reply_text,
+                media_url=media_url
             )
         
         # Save auto-reply message
@@ -2076,6 +2087,7 @@ async def handle_incoming_text_reply(
             record_id=record.id,
             sender="system",
             message_text=reply_text,
+            media_url=media_url,
             message_id=auto_msg_id
         )
         db.add(auto_chat_msg)

@@ -45,7 +45,8 @@ class WhatsAppClient(abc.ABC):
     async def send_free_form_message(
         self, 
         to_phone: str, 
-        message_text: str
+        message_text: str,
+        media_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Send a WhatsApp free-form text message to a candidate within the 24-hour window.
@@ -57,7 +58,8 @@ class WhatsAppClient(abc.ABC):
         self,
         to_phone: str,
         message_text: str,
-        buttons: list
+        buttons: list,
+        media_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Send an interactive message with quick-reply buttons (max 3 buttons).
@@ -108,13 +110,19 @@ class MockWhatsAppClient(WhatsAppClient):
     async def send_free_form_message(
         self, 
         to_phone: str, 
-        message_text: str
+        message_text: str,
+        media_url: Optional[str] = None
     ) -> Dict[str, Any]:
         await asyncio.sleep(0.05)
         message_id = f"wa_msg_free_{uuid.uuid4().hex[:12]}"
-        logger.info(
-            f"MOCK FREE-FORM DISPATCH -> To: {to_phone} | Message ID: {message_id} | Content: {message_text}"
-        )
+        if media_url:
+            logger.info(
+                f"MOCK FREE-FORM DISPATCH [ATTACHMENT: {media_url}] -> To: {to_phone} | Message ID: {message_id} | Content: {message_text}"
+            )
+        else:
+            logger.info(
+                f"MOCK FREE-FORM DISPATCH -> To: {to_phone} | Message ID: {message_id} | Content: {message_text}"
+            )
         return {
             "status": "success",
             "message_id": message_id,
@@ -126,13 +134,19 @@ class MockWhatsAppClient(WhatsAppClient):
         self,
         to_phone: str,
         message_text: str,
-        buttons: list
+        buttons: list,
+        media_url: Optional[str] = None
     ) -> Dict[str, Any]:
         await asyncio.sleep(0.05)
         message_id = f"wa_msg_int_{uuid.uuid4().hex[:12]}"
-        logger.info(
-            f"MOCK INTERACTIVE DISPATCH -> To: {to_phone} | Message ID: {message_id} | Content: {message_text} | Buttons: {buttons}"
-        )
+        if media_url:
+            logger.info(
+                f"MOCK INTERACTIVE DISPATCH [ATTACHMENT: {media_url}] -> To: {to_phone} | Message ID: {message_id} | Content: {message_text} | Buttons: {buttons}"
+            )
+        else:
+            logger.info(
+                f"MOCK INTERACTIVE DISPATCH -> To: {to_phone} | Message ID: {message_id} | Content: {message_text} | Buttons: {buttons}"
+            )
         return {
             "status": "success",
             "message_id": message_id,
@@ -386,10 +400,21 @@ class MetaWhatsAppClient(WhatsAppClient):
                 "message": str(e)
             }
 
+    def _get_media_type(self, url: str) -> str:
+        if not url:
+            return "none"
+        url_lower = url.lower()
+        image_exts = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]
+        for ext in image_exts:
+            if url_lower.endswith(ext) or ext in url_lower:
+                return "image"
+        return "document"
+
     async def send_free_form_message(
         self, 
         to_phone: str, 
-        message_text: str
+        message_text: str,
+        media_url: Optional[str] = None
     ) -> Dict[str, Any]:
         import httpx
         if not self.access_token or not self.phone_number_id:
@@ -406,16 +431,42 @@ class MetaWhatsAppClient(WhatsAppClient):
             "Content-Type": "application/json"
         }
         
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": clean_phone,
-            "type": "text",
-            "text": {
-                "preview_url": False,
-                "body": message_text
+        media_type = self._get_media_type(media_url)
+        if media_type == "image":
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": clean_phone,
+                "type": "image",
+                "image": {
+                    "link": media_url,
+                    "caption": message_text
+                }
             }
-        }
+        elif media_type == "document":
+            filename = media_url.split("/")[-1].split("?")[0] or "document.pdf"
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": clean_phone,
+                "type": "document",
+                "document": {
+                    "link": media_url,
+                    "filename": filename,
+                    "caption": message_text
+                }
+            }
+        else:
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": clean_phone,
+                "type": "text",
+                "text": {
+                    "preview_url": False,
+                    "body": message_text
+                }
+            }
         
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -450,7 +501,8 @@ class MetaWhatsAppClient(WhatsAppClient):
         self, 
         to_phone: str, 
         message_text: str,
-        buttons: list
+        buttons: list,
+        media_url: Optional[str] = None
     ) -> Dict[str, Any]:
         import httpx
         if not self.access_token or not self.phone_number_id:
@@ -467,29 +519,47 @@ class MetaWhatsAppClient(WhatsAppClient):
             "Content-Type": "application/json"
         }
         
+        interactive_body = {
+            "type": "button",
+            "body": {
+                "text": message_text
+            },
+            "action": {
+                "buttons": [
+                    {
+                        "type": "reply",
+                        "reply": {
+                            "id": f"btn_{i}",
+                            "title": btn_text[:20]
+                        }
+                    }
+                    for i, btn_text in enumerate(buttons[:3])
+                ]
+            }
+        }
+        
+        media_type = self._get_media_type(media_url)
+        if media_type == "image":
+            interactive_body["header"] = {
+                "type": "image",
+                "image": {
+                    "link": media_url
+                }
+            }
+        elif media_type == "document":
+            interactive_body["header"] = {
+                "type": "document",
+                "document": {
+                    "link": media_url
+                }
+            }
+            
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
             "to": clean_phone,
             "type": "interactive",
-            "interactive": {
-                "type": "button",
-                "body": {
-                    "text": message_text
-                },
-                "action": {
-                    "buttons": [
-                        {
-                            "type": "reply",
-                            "reply": {
-                                "id": f"btn_{i}",
-                                "title": btn_text[:20]
-                            }
-                        }
-                        for i, btn_text in enumerate(buttons[:3])
-                    ]
-                }
-            }
+            "interactive": interactive_body
         }
         
         try:

@@ -252,6 +252,33 @@ const MessageNode = ({ data, isConnectable, selected }) => {
           </div>
         </div>
 
+        {(data.mediaUrl || data.media_url) && (
+          <div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.68rem', textTransform: 'uppercase', fontWeight: 600, marginBottom: '4px', letterSpacing: '0.02em' }}>
+              Media Attachment:
+            </div>
+            <div style={{
+              fontSize: '0.7rem',
+              background: '#f1f5f9',
+              border: '1px solid #cbd5e1',
+              borderRadius: '6px',
+              padding: '0.35rem 0.5rem',
+              color: '#0f172a',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              textOverflow: 'ellipsis',
+              overflow: 'hidden',
+              whiteSpace: 'nowrap'
+            }}>
+              <span>📎</span>
+              <span title={data.mediaUrl || data.media_url}>
+                {(data.mediaUrl || data.media_url).split('/').pop().split('?')[0] || 'Attachment'}
+              </span>
+            </div>
+          </div>
+        )}
+
         {data.buttons && data.buttons.length > 0 && (
           <div>
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.68rem', textTransform: 'uppercase', fontWeight: 600, marginBottom: '4px', letterSpacing: '0.02em' }}>
@@ -487,6 +514,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
   const [keyword, setKeyword] = useState('');
   const [messageText, setMessageText] = useState('');
   const [buttons, setButtons] = useState(['', '', '']);
+  const [mediaUrl, setMediaUrl] = useState('');
   
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -833,6 +861,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
       setMessageText(node.data.text || '');
       const btns = node.data.buttons || [];
       setButtons([btns[0] || '', btns[1] || '', btns[2] || '']);
+      setMediaUrl(node.data.mediaUrl || node.data.media_url || '');
     }
   }, []);
 
@@ -854,7 +883,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
             const activeBtns = buttons.filter(b => b.trim() !== '');
             return {
               ...node,
-              data: { ...node.data, text: messageText, buttons: activeBtns }
+              data: { ...node.data, text: messageText, buttons: activeBtns, mediaUrl: mediaUrl }
             };
           }
         }
@@ -1976,6 +2005,23 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                           onChange={(e) => setMessageText(e.target.value)}
                           placeholder="Type the WhatsApp response..."
                         />
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                        <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Attachment URL (Image/PDF)
+                        </label>
+                        <input
+                          type="text"
+                          className="premium-input premium-input-emerald"
+                          value={mediaUrl}
+                          onChange={(e) => setMediaUrl(e.target.value)}
+                          placeholder="https://example.com/document.pdf or image.jpg"
+                          style={{ padding: '0.45rem 0.6rem', fontSize: '0.8rem' }}
+                        />
+                        <p style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', marginTop: '0.1rem', lineHeight: '1.2' }}>
+                          Optional link to a public PDF, document, or image to attach as part of this reply.
+                        </p>
                       </div>
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
