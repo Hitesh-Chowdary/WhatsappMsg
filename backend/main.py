@@ -1200,12 +1200,50 @@ async def upload_template_media(
         logger.error(f"Failed to write template media file: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
         
-    # Return URLs
+        # Return URLs
     return {
         "status": "success",
         "filename": file.filename,
         "media_url": f"/static/media/{safe_filename}",
         "full_url": f"http://localhost:8000/static/media/{safe_filename}"
+    }
+
+@app.post("/api/v1/media/upload")
+async def upload_general_media(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Uploads a media file (image/document) and hosts it locally, returning the dynamic absolute URL."""
+    ext = file.filename.split(".")[-1].lower()
+    if ext not in ["jpg", "jpeg", "png", "gif", "pdf", "docx", "xlsx"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Supported formats: JPG, JPEG, PNG, GIF, PDF, DOCX, XLSX."
+        )
+    
+    media_dir = os.path.join(PROJECT_ROOT, "frontend", "static", "media")
+    os.makedirs(media_dir, exist_ok=True)
+    
+    import uuid
+    safe_filename = f"media_{uuid.uuid4().hex[:12]}.{ext}"
+    file_path = os.path.join(media_dir, safe_filename)
+    
+    try:
+        contents = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(contents)
+    except Exception as e:
+        logger.error(f"Failed to write media file: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        
+    base_url = get_request_base_url(request).rstrip("/")
+    absolute_url = f"{base_url}/static/media/{safe_filename}"
+    
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "media_url": absolute_url
     }
 
 def get_request_base_url(request: Request) -> str:

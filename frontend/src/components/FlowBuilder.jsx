@@ -515,6 +515,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
   const [messageText, setMessageText] = useState('');
   const [buttons, setButtons] = useState(['', '', '']);
   const [mediaUrl, setMediaUrl] = useState('');
+  const [uploading, setUploading] = useState(false);
   
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -864,6 +865,32 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
       setMediaUrl(node.data.mediaUrl || node.data.media_url || '');
     }
   }, []);
+
+  const handleAttachmentUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    setUploading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/media/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Upload failed');
+      
+      setMediaUrl(data.media_url);
+      setStatusMessage('File uploaded successfully! Click Update Node to save.');
+      setTimeout(() => setStatusMessage(''), 3000);
+    } catch (err) {
+      showAlert('Upload Error', err.message || 'Failed to upload file.');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   // Node editing state updates
   const updateSelectedNode = () => {
@@ -2011,16 +2038,40 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                         <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                           Attachment URL (Image/PDF)
                         </label>
-                        <input
-                          type="text"
-                          className="premium-input premium-input-emerald"
-                          value={mediaUrl}
-                          onChange={(e) => setMediaUrl(e.target.value)}
-                          placeholder="https://example.com/document.pdf or image.jpg"
-                          style={{ padding: '0.45rem 0.6rem', fontSize: '0.8rem' }}
-                        />
+                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            className="premium-input premium-input-emerald"
+                            value={mediaUrl}
+                            onChange={(e) => setMediaUrl(e.target.value)}
+                            placeholder="https://example.com/document.pdf or image.jpg"
+                            style={{ padding: '0.45rem 0.6rem', fontSize: '0.8rem', flexGrow: 1 }}
+                          />
+                          <label 
+                            className="premium-btn premium-btn-secondary" 
+                            style={{ 
+                              padding: '0.45rem 0.65rem', 
+                              fontSize: '0.75rem', 
+                              cursor: 'pointer', 
+                              margin: 0, 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              gap: '0.2rem',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            {uploading ? '⌛ Uploading...' : '📁 Upload File'}
+                            <input
+                              type="file"
+                              style={{ display: 'none' }}
+                              onChange={handleAttachmentUpload}
+                              disabled={uploading}
+                              accept=".jpg,.jpeg,.png,.gif,.pdf,.docx,.xlsx"
+                            />
+                          </label>
+                        </div>
                         <p style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', marginTop: '0.1rem', lineHeight: '1.2' }}>
-                          Optional link to a public PDF, document, or image to attach as part of this reply.
+                          Upload an attachment (brochure, image, PDF) directly, or paste a link.
                         </p>
                       </div>
 
