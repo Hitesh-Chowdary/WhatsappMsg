@@ -322,33 +322,14 @@ async def init_db():
         # No default templates seeded to ensure a clean database environment.
         pass
 
-    # Seed default auto-reply rules if empty
+    # Auto-delete legacy default rules to avoid conflicts with custom BotFlow builder
     async with AsyncSessionLocal() as session:
-        from sqlalchemy import select
-        stmt = select(AutoReplyRule)
-        res = await session.execute(stmt)
-        rules = res.scalars().all()
-        if not rules:
-            default_rules = [
-                AutoReplyRule(
-                    keyword="default",
-                    reply_text="Thank you for contacting our WhatsApp Automation Portal! A counselor has been notified and will respond to you shortly. Feel free to ask about fees, hostel, or eligibility."
-                ),
-                AutoReplyRule(
-                    keyword="fees",
-                    reply_text="Our annual tuition fees vary by department. Standard engineering branch fee is ₹1,20,000/year, and management/degree courses are ₹80,000/year. Scholarships are available for meritorious students."
-                ),
-                AutoReplyRule(
-                    keyword="hostel",
-                    reply_text="We offer comfortable on-campus hostel facilities for both boys and girls with 24/7 security, Wi-Fi, laundry, and dining. Hostel fee starts at ₹75,000/year."
-                ),
-                AutoReplyRule(
-                    keyword="eligibility",
-                    reply_text="For Bachelor courses, candidates must have passed 10+2 with a minimum of 50% aggregate marks. Direct admission under Management quota is open. Please submit your board marksheets for review."
-                )
-            ]
-            session.add_all(default_rules)
-            await session.commit()
+        from sqlalchemy import delete
+        stmt = delete(AutoReplyRule).where(
+            AutoReplyRule.keyword.in_(["default", "fees", "hostel", "eligibility"])
+        )
+        await session.execute(stmt)
+        await session.commit()
 
     # Seed default admin user
     async with AsyncSessionLocal() as session:
