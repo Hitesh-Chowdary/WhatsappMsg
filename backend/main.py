@@ -1656,20 +1656,6 @@ async def handle_quick_reply_auto_response(
                 
         if matched_rule:
             reply_text = matched_rule.reply_text
-        else:
-            # Default fallbacks if no custom rule configured
-            if button_text.lower().strip() == "interested":
-                reply_text = (
-                    "Thank you, [Parent Name]! We have recorded your interest for [Selected Branch]. "
-                    "Our outreach counselor will call you shortly to discuss seat allocation, "
-                    "scholarship options, and hostel facilities. 📞"
-                )
-            elif button_text.lower().strip() == "not interested":
-                reply_text = (
-                    "We understand, [Parent Name]. We have updated your preference in our portal and "
-                    "will not send further automated updates. If you change your mind, feel free to contact "
-                    "us anytime. Thank you!"
-                )
                 
     if reply_text:
         # Compile dynamic placeholders from database record fields
@@ -1995,41 +1981,6 @@ async def handle_incoming_text_reply(
         return {"status": "success", "record_id": record.id}
         
     response_data = await get_bot_response(message_text, db, template_name=record.sent_template)
-    
-    # Check if incoming message is a standard greeting
-    normalized_incoming = message_text.lower().strip()
-    greetings = ["hi", "hello", "hey", "good morning", "start", "greetings"]
-    is_greeting = False
-    for g in greetings:
-        if re.search(rf"\b{re.escape(g)}\b", normalized_incoming):
-            is_greeting = True
-            break
-            
-    is_direct_inquiry = (record.selected_branch == "Direct Inquiry")
-    
-    # Check if we should override response with a professional welcome greeting
-    should_welcome = False
-    if is_direct_inquiry:
-        if is_greeting or not response_data or response_data.get("source_keyword") in ["default", "fallback"]:
-            should_welcome = True
-    else:
-        if is_greeting:
-            should_welcome = True
-            
-    if should_welcome:
-        welcome_text = (
-            f"Hello! Welcome to Dr. RVR NRI Institute of Technology. 🎓\n\n"
-            f"How can we help you today? Please reply with one of these keywords to get instant info:\n"
-            f"• *Admission* (for details & criteria)\n"
-            f"• *Branch* (to see available engineering branches)\n"
-            f"• *Location* (for campus address & map)\n"
-            f"• *Counselor* (to chat with a human representative)"
-        )
-        response_data = {
-            "reply_text": welcome_text,
-            "buttons": ["Admission Details", "Contact Counselor"],
-            "source_keyword": "welcome"
-        }
         
     # Check if this is a default/fallback message (to prevent loop spam)
     if response_data and response_data.get("source_keyword") in ["default", "fallback"]:
