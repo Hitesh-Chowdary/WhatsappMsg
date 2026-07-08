@@ -1633,7 +1633,7 @@ async def handle_quick_reply_auto_response(
         return
         
     # Check active BotFlow first
-    bot_resp = await get_bot_response(button_text, db, template_name=record.sent_template)
+    bot_resp = await get_bot_response(button_text, db, record, template_name=record.sent_template)
     
     reply_text = None
     buttons = []
@@ -1735,12 +1735,15 @@ def match_keyword(keyword: str, text: str) -> bool:
     return False
 
 # Helper to process incoming text replies and trigger auto-responder
-async def get_bot_response(message_text: str, db: AsyncSession, template_name: Optional[str] = None) -> Optional[dict]:
+async def get_bot_response(message_text: str, db: AsyncSession, record: Record, template_name: Optional[str] = None) -> Optional[dict]:
     """
     Checks if there is an active BotFlow and traverses it to find a matching response.
     Falls back to AutoReplyRules if no active BotFlow exists or no match is found in the flow.
     """
     normalized_text = message_text.lower().strip()
+    
+    current_vars = record.variables or {}
+    active_flow_id = current_vars.get("active_flow_id")
     
     def traverse_flow(flow_data: dict) -> Optional[dict]:
         nodes = flow_data.get("nodes", [])
@@ -1791,8 +1794,21 @@ async def get_bot_response(message_text: str, db: AsyncSession, template_name: O
                         }
         return None
 
-    # 1. Check template-specific active BotFlow
-    if template_name:
+    matched_flow = None
+    res = None
+    
+    # 1. Try matching within the currently active flow context first
+    if active_flow_id:
+        flow_stmt = select(BotFlow).where(BotFlow.id == active_flow_id, BotFlow.is_active == True).limit(1)
+        flow_res = await db.execute(flow_stmt)
+        active_flow = flow_res.scalars().first()
+        if active_flow and active_flow.flow_data:
+            res = traverse_flow(active_flow.flow_data)
+            if res:
+                matched_flow = active_flow
+                
+    # 2. Check template-specific active BotFlow
+    if not res and template_name:
         tmpl_stmt = select(BotFlow).where(
             BotFlow.is_active == True,
             func.lower(BotFlow.template_name) == template_name.lower()
@@ -1802,21 +1818,31 @@ async def get_bot_response(message_text: str, db: AsyncSession, template_name: O
         if active_flow and active_flow.flow_data:
             res = traverse_flow(active_flow.flow_data)
             if res:
-                return res
+                matched_flow = active_flow
                 
-    # 2. Check active global BotFlow (where template_name is None or empty string)
-    global_stmt = select(BotFlow).where(
-        BotFlow.is_active == True,
-        or_(BotFlow.template_name == None, BotFlow.template_name == "")
-    ).limit(1)
-    global_res = await db.execute(global_stmt)
-    active_global_flow = global_res.scalars().first()
-    if active_global_flow and active_global_flow.flow_data:
-        res = traverse_flow(active_global_flow.flow_data)
-        if res:
-            return res
-            
-    # 3. Fallback to AutoReplyRules (Legacy)
+    # 3. Check active global BotFlow (where template_name is None or empty string)
+    if not res:
+        global_stmt = select(BotFlow).where(
+            BotFlow.is_active == True,
+            or_(BotFlow.template_name == None, BotFlow.template_name == "")
+        ).limit(1)
+        global_res = await db.execute(global_stmt)
+        active_global_flow = global_res.scalars().first()
+        if active_global_flow and active_global_flow.flow_data:
+            res = traverse_flow(active_global_flow.flow_data)
+            if res:
+                matched_flow = active_global_flow
+                
+    # If a flow was matched and resolved a response, save active context to record
+    if matched_flow:
+        record.variables = {**current_vars, "active_flow_id": matched_flow.id}
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(record, "variables")
+        
+    if res:
+        return res
+        
+    # 4. Fallback to AutoReplyRules (Legacy)
     rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
     rules_res = await db.execute(rules_stmt)
     all_rules = rules_res.scalars().all()
@@ -1981,7 +2007,7 @@ async def handle_incoming_text_reply(
         await db.commit()
         return {"status": "success", "record_id": record.id}
         
-    response_data = await get_bot_response(message_text, db, template_name=record.sent_template)
+    response_data = await get_bot_response(message_text, db, record, template_name=record.sent_template)
         
     # Check if this is a default/fallback message (to prevent loop spam)
     if response_data and response_data.get("source_keyword") in ["default", "fallback"]:

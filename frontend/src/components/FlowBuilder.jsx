@@ -513,7 +513,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
   // Node fields
   const [keyword, setKeyword] = useState('');
   const [messageText, setMessageText] = useState('');
-  const [buttons, setButtons] = useState(['', '', '']);
+  const [buttons, setButtons] = useState([]);
   const [mediaUrl, setMediaUrl] = useState('');
   const [uploading, setUploading] = useState(false);
   
@@ -861,8 +861,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
       setKeyword(node.data.keyword || '');
     } else if (node.type === 'message') {
       setMessageText(node.data.text || '');
-      const btns = node.data.buttons || [];
-      setButtons([btns[0] || '', btns[1] || '', btns[2] || '']);
+      setButtons(node.data.buttons || []);
       setMediaUrl(node.data.mediaUrl || node.data.media_url || '');
     }
   }, []);
@@ -2083,9 +2082,9 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                         <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                           Quick Reply Buttons (Max 3)
                         </label>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                           {buttons.map((btn, idx) => (
-                            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                               <span style={{ fontSize: '0.75rem', color: '#94a3b8', width: '12px' }}>{idx + 1}</span>
                               <input
                                 type="text"
@@ -2093,10 +2092,50 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                                 value={btn}
                                 onChange={(e) => handleButtonChange(idx, e.target.value)}
                                 placeholder={`Button ${idx + 1} Label`}
-                                style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                                style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', flexGrow: 1 }}
+                                maxLength={20}
                               />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newBtns = buttons.filter((_, i) => i !== idx);
+                                  setButtons(newBtns);
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#ef4444',
+                                  cursor: 'pointer',
+                                  fontSize: '0.9rem',
+                                  padding: '0.2rem',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                                title="Remove button"
+                              >
+                                🗑️
+                              </button>
                             </div>
                           ))}
+                          {buttons.length < 3 && (
+                            <button
+                              type="button"
+                              className="premium-btn premium-btn-secondary"
+                              onClick={() => setButtons([...buttons, ''])}
+                              style={{
+                                marginTop: '0.2rem',
+                                padding: '0.35rem 0.5rem',
+                                fontSize: '0.72rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.2rem',
+                                width: 'fit-content'
+                              }}
+                            >
+                              ➕ Add Button Option
+                            </button>
+                          )}
                         </div>
                         <p style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '0.1rem', lineHeight: '1.3' }}>
                           Admins can configure up to 3 quick reply buttons. Students click these to continue traversal.

@@ -677,9 +677,11 @@ function App() {
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
 
       if (isNewChat || isNearBottom || forceScrollRef.current) {
-        if (chatBottomRef.current) {
-          chatBottomRef.current.scrollIntoView({ behavior: 'instant' });
-        }
+        setTimeout(() => {
+          if (chatBottomRef.current) {
+            chatBottomRef.current.scrollIntoView({ behavior: 'instant' });
+          }
+        }, 60);
         forceScrollRef.current = false;
       }
     }
