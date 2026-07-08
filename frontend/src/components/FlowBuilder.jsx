@@ -805,6 +805,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
       setStatusMessage('Auto-saving flow changes... 🔄');
       try {
         const payload = {
+          id: currentFlow.id,
           name: currentFlow.name || 'Default Flow',
           flow_data: { nodes, edges },
           is_active: currentFlow.is_active !== undefined ? currentFlow.is_active : false,
@@ -963,6 +964,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
     setStatusMessage('');
     try {
       const payload = {
+        id: currentFlow.id,
         name: currentFlow.name || 'Default Flow',
         flow_data: { nodes, edges },
         is_active: currentFlow.is_active !== undefined ? currentFlow.is_active : false,
@@ -1115,6 +1117,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
     setStatusMessage(isActive ? 'Activating flow... 🚀' : 'Deactivating flow... ⏸️');
     try {
       const payload = {
+        id: flow.id,
         name: flow.name,
         flow_data: flow.flow_data,
         template_name: flow.template_name,
@@ -1147,6 +1150,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
     setStatusMessage(`Assigning "${flow.name}"... 🔄`);
     try {
       const payload = {
+        id: flow.id,
         name: flow.name,
         flow_data: flow.flow_data,
         template_name: templateName || null,

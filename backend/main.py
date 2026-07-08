@@ -83,6 +83,7 @@ class AutoReplyRulePayload(BaseModel):
     is_active: Optional[bool] = True
 
 class BotFlowPayload(BaseModel):
+    id: Optional[int] = None
     name: str
     flow_data: dict
     is_active: Optional[bool] = True
@@ -3236,11 +3237,19 @@ async def save_bot_flow(
                 .values(is_active=False)
             )
         
-    stmt = select(BotFlow).where(BotFlow.name == payload.name)
-    res = await db.execute(stmt)
-    flow = res.scalar_one_or_none()
+    flow = None
+    if payload.id is not None:
+        stmt = select(BotFlow).where(BotFlow.id == payload.id)
+        res = await db.execute(stmt)
+        flow = res.scalar_one_or_none()
+        
+    if not flow:
+        stmt = select(BotFlow).where(BotFlow.name == payload.name)
+        res = await db.execute(stmt)
+        flow = res.scalar_one_or_none()
     
     if flow:
+        flow.name = payload.name
         flow.flow_data = payload.flow_data
         flow.is_active = payload.is_active if payload.is_active is not None else True
         flow.template_name = payload.template_name
