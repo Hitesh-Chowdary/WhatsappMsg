@@ -282,7 +282,7 @@ const MessageNode = ({ data, isConnectable, selected }) => {
         {data.buttons && data.buttons.length > 0 && (
           <div>
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.68rem', textTransform: 'uppercase', fontWeight: 600, marginBottom: '4px', letterSpacing: '0.02em' }}>
-              Interactive Buttons:
+              {data.interactiveType === 'list' ? `List Menu: ${data.listButtonLabel || 'Select Option'}` : 'Interactive Buttons:'}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
               {data.buttons.map((btn, i) => (
@@ -299,7 +299,7 @@ const MessageNode = ({ data, isConnectable, selected }) => {
                   gap: '0.35rem',
                   boxShadow: '0 1px 2px rgba(0,0,0,0.02)'
                 }}>
-                  <IconRadio />
+                  {data.interactiveType === 'list' ? <span>📑</span> : <IconRadio />}
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{btn}</span>
                 </div>
               ))}
@@ -514,6 +514,8 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
   const [keyword, setKeyword] = useState('');
   const [messageText, setMessageText] = useState('');
   const [buttons, setButtons] = useState([]);
+  const [interactiveType, setInteractiveType] = useState('button');
+  const [listButtonLabel, setListButtonLabel] = useState('Select Option');
   const [mediaUrl, setMediaUrl] = useState('');
   const [uploading, setUploading] = useState(false);
   
@@ -862,6 +864,8 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
     } else if (node.type === 'message') {
       setMessageText(node.data.text || '');
       setButtons(node.data.buttons || []);
+      setInteractiveType(node.data.interactiveType || 'button');
+      setListButtonLabel(node.data.listButtonLabel || 'Select Option');
       setMediaUrl(node.data.mediaUrl || node.data.media_url || '');
     }
   }, []);
@@ -910,7 +914,14 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
             const activeBtns = buttons.filter(b => b.trim() !== '');
             return {
               ...node,
-              data: { ...node.data, text: messageText, buttons: activeBtns, mediaUrl: mediaUrl }
+              data: { 
+                ...node.data, 
+                text: messageText, 
+                buttons: activeBtns, 
+                interactiveType: interactiveType,
+                listButtonLabel: listButtonLabel,
+                mediaUrl: mediaUrl 
+              }
             };
           }
         }
@@ -2078,9 +2089,51 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                         </p>
                       </div>
 
+                      {/* Interactive Format Selection */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                        <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Interactive Format
+                        </label>
+                        <select
+                          className="premium-input premium-input-emerald"
+                          value={interactiveType}
+                          onChange={(e) => {
+                            setInteractiveType(e.target.value);
+                            // Clear buttons array if format changes, to clean it up
+                            setButtons([]);
+                          }}
+                          style={{ padding: '0.45rem', fontSize: '0.8rem' }}
+                        >
+                          <option value="button">Quick Reply Buttons (Max 3)</option>
+                          <option value="list">List Menu Dropdown (Max 10)</option>
+                        </select>
+                      </div>
+
+                      {/* List Menu Button Label (only visible if list mode is active) */}
+                      {interactiveType === 'list' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                          <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            Menu Button Label
+                          </label>
+                          <input
+                            type="text"
+                            className="premium-input premium-input-emerald"
+                            value={listButtonLabel}
+                            onChange={(e) => setListButtonLabel(e.target.value)}
+                            placeholder="e.g. Choose Branch"
+                            maxLength={20}
+                            style={{ padding: '0.45rem 0.6rem', fontSize: '0.8rem' }}
+                          />
+                          <p style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', marginTop: '0.1rem', lineHeight: '1.2' }}>
+                            The text displayed on the main menu button that users click (max 20 characters).
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Options List */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                         <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                          Quick Reply Buttons (Max 3)
+                          {interactiveType === 'list' ? 'List Options (Max 10)' : 'Quick Reply Buttons (Max 3)'}
                         </label>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                           {buttons.map((btn, idx) => (
@@ -2091,9 +2144,9 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                                 className="premium-input premium-input-emerald"
                                 value={btn}
                                 onChange={(e) => handleButtonChange(idx, e.target.value)}
-                                placeholder={`Button ${idx + 1} Label`}
+                                placeholder={interactiveType === 'list' ? `Option ${idx + 1} Label` : `Button ${idx + 1} Label`}
                                 style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', flexGrow: 1 }}
-                                maxLength={20}
+                                maxLength={24}
                               />
                               <button
                                 type="button"
@@ -2111,13 +2164,13 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                                   display: 'flex',
                                   alignItems: 'center'
                                 }}
-                                title="Remove button"
+                                title="Remove item"
                               >
                                 🗑️
                               </button>
                             </div>
                           ))}
-                          {buttons.length < 3 && (
+                          {buttons.length < (interactiveType === 'list' ? 10 : 3) && (
                             <button
                               type="button"
                               className="premium-btn premium-btn-secondary"
@@ -2133,12 +2186,15 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
                                 width: 'fit-content'
                               }}
                             >
-                              ➕ Add Button Option
+                              ➕ {interactiveType === 'list' ? 'Add List Option' : 'Add Button Option'}
                             </button>
                           )}
                         </div>
                         <p style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '0.1rem', lineHeight: '1.3' }}>
-                          Admins can configure up to 3 quick reply buttons. Students click these to continue traversal.
+                          {interactiveType === 'list' 
+                            ? 'Configure up to 10 options. Users click the dropdown menu to select a single choice.'
+                            : 'Configure up to 3 quick-reply buttons. Users click these directly on the chat interface.'
+                          }
                         </p>
                       </div>
                     </div>

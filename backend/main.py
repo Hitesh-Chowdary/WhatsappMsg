@@ -1683,15 +1683,27 @@ async def handle_quick_reply_auto_response(
                             reply_text = reply_text.replace(f"[{p}]", val)
                             break
         
-        # Send message via WhatsApp (supporting interactive buttons!)
+        # Send message via WhatsApp (supporting interactive buttons & lists!)
         whatsapp_client = get_whatsapp_client()
+        interactive_type = bot_resp.get("interactive_type", "button")
+        list_button_label = bot_resp.get("list_button_label", "Select Option")
+        
         if buttons:
-            response = await whatsapp_client.send_interactive_message(
-                to_phone=record.phone_number,
-                message_text=reply_text,
-                buttons=buttons,
-                media_url=media_url
-            )
+            if interactive_type == "list":
+                response = await whatsapp_client.send_list_message(
+                    to_phone=record.phone_number,
+                    message_text=reply_text,
+                    button_label=list_button_label,
+                    options=buttons,
+                    media_url=media_url
+                )
+            else:
+                response = await whatsapp_client.send_interactive_message(
+                    to_phone=record.phone_number,
+                    message_text=reply_text,
+                    buttons=buttons,
+                    media_url=media_url
+                )
         else:
             response = await whatsapp_client.send_free_form_message(
                 to_phone=record.phone_number,
@@ -1786,10 +1798,14 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
                         # Strip empty buttons
                         buttons = [b.strip() for b in buttons if b and b.strip()]
                         media_url = data.get("mediaUrl") or data.get("media_url") or None
+                        interactive_type = data.get("interactiveType", "button")
+                        list_button_label = data.get("listButtonLabel", "Select Option")
                         return {
                             "reply_text": reply_text,
                             "buttons": buttons,
                             "media_url": media_url,
+                            "interactive_type": interactive_type,
+                            "list_button_label": list_button_label,
                             "source_keyword": trigger_node.get("data", {}).get("keyword", "default")
                         }
         return None
@@ -2083,13 +2099,25 @@ async def handle_incoming_text_reply(
                                 break
         
         whatsapp_client = get_whatsapp_client()
+        interactive_type = response_data.get("interactive_type", "button")
+        list_button_label = response_data.get("list_button_label", "Select Option")
+        
         if buttons:
-            response = await whatsapp_client.send_interactive_message(
-                to_phone=from_phone,
-                message_text=reply_text,
-                buttons=buttons,
-                media_url=media_url
-            )
+            if interactive_type == "list":
+                response = await whatsapp_client.send_list_message(
+                    to_phone=from_phone,
+                    message_text=reply_text,
+                    button_label=list_button_label,
+                    options=buttons,
+                    media_url=media_url
+                )
+            else:
+                response = await whatsapp_client.send_interactive_message(
+                    to_phone=from_phone,
+                    message_text=reply_text,
+                    buttons=buttons,
+                    media_url=media_url
+                )
         else:
             response = await whatsapp_client.send_free_form_message(
                 to_phone=from_phone,
@@ -2209,7 +2237,11 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     if msg_type == "button":
                         button_text = message.get("button", {}).get("text")
                     elif msg_type == "interactive":
-                        button_text = message.get("interactive", {}).get("button_reply", {}).get("title")
+                        interactive_data = message.get("interactive", {})
+                        if "button_reply" in interactive_data:
+                            button_text = interactive_data.get("button_reply", {}).get("title")
+                        elif "list_reply" in interactive_data:
+                            button_text = interactive_data.get("list_reply", {}).get("title")
                     elif msg_type == "text":
                         button_text = message.get("text", {}).get("body")
                         
