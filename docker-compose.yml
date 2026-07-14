@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   db:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: whatsapp_crm_db
     restart: always
     environment:
@@ -20,6 +20,8 @@ services:
       dockerfile: Dockerfile
     container_name: whatsapp_crm_web
     restart: always
+    # CRITICAL: Binds container virtual network interface card to the licensed MAC address expected by PyArmor
+    mac_address: 44:f7:9f:db:15:c1
     ports:
       - "8000:8000"
     depends_on:

@@ -16,9 +16,10 @@ env/
 
 # Node/Frontend
 node_modules/
-# dist/
+dist/
 !frontend/dist/
 dist-ssr/
+*.log
 *.local
 
 # System/IDE files

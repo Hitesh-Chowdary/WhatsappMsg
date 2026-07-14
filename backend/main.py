@@ -10,10 +10,11 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Query, Ba
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 import pandas as pd
 from sqlalchemy import select, func, or_, and_, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Setup path logic to ensure clean imports when running from root or backend folder
@@ -391,6 +392,14 @@ app = FastAPI(
     docs_url=None, # Disable Swagger UI to prevent endpoint leaks
     redoc_url=None # Disable ReDoc UI
 )
+
+@app.exception_handler(SQLAlchemyError)
+async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+    logger.error(f"Database error occurred: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error"}
+    )
 
 # Enable CORS for external/local testing
 app.add_middleware(
