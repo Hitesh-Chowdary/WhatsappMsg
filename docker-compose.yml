@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: whatsapp_crm_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: whatsapp_crm
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: whatsapp_crm_web
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/whatsapp_crm
+      - WHATSAPP_CLIENT_TYPE=meta_cloud
+      - META_ACCESS_TOKEN=your_permanent_meta_access_token_here
+      - META_PHONE_NUMBER_ID=your_meta_phone_number_id_here
+      - WHATSAPP_VERIFY_TOKEN=your_secret_webhook_verify_token_here
+      - JWT_SECRET=change_me_to_a_random_secret_in_production
+    volumes:
+      # Persistent volume mapping for uploaded media brochures and PDFs
+      - media_data:/app/frontend/static/media
+
+volumes:
+  postgres_data:
+  media_data:
