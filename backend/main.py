@@ -2241,6 +2241,15 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         }
 
     # 5. Check AI Knowledge Base (Brochures & Crawled Website Pages)
+    # Skip AI brochure search for stop/closing words
+    if normalized_text in ["stop", "bye", "cancel", "exit", "quit", "unsubscribe", "optout"]:
+        return {
+            "reply_text": "Thank you! Feel free to reach out anytime if you need further assistance or information.",
+            "buttons": ["Main Menu"],
+            "media_url": None,
+            "source_keyword": normalized_text
+        }
+
     try:
         brochure_stmt = select(BrochureDocument).where(BrochureDocument.is_active == True)
         brochure_res = await db.execute(brochure_stmt)
@@ -2320,6 +2329,17 @@ def resolve_template_text(template_text: Optional[str], record, merged_vars: dic
                     msg_body = msg_body.replace(f"{{{{{dp}}}}}", str(val))
                     break
                     
+    # 4. Replace 00:00:00 placeholders with real live IST time
+    if "00:00:00" in msg_body:
+        from datetime import datetime
+        import pytz
+        try:
+            ist = pytz.timezone("Asia/Kolkata")
+            live_time = datetime.now(ist).strftime("%I:%M %p")
+        except Exception:
+            live_time = datetime.now().strftime("%I:%M %p")
+        msg_body = msg_body.replace("00:00:00", live_time)
+        
     return msg_body
                     
 def detect_and_save_call_request(record, text: str):

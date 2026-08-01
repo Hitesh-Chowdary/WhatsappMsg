@@ -1306,29 +1306,19 @@ function App() {
 
   // Auto-scroll to the bottom of chat messages intelligently
   useEffect(() => {
-    if (!activeChatRecordId) {
-      prevActiveChatRecordIdRef.current = null;
-      return;
-    }
+    if (!activeChatRecordId) return;
 
-    const container = chatContainerRef.current;
-    const isNewChat = prevActiveChatRecordIdRef.current !== activeChatRecordId;
-    prevActiveChatRecordIdRef.current = activeChatRecordId;
-
-    if (container) {
-      // Determine if the user was already scrolled to the bottom (within a threshold)
-      const threshold = 120; // Allow 120px buffer
-      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
-
-      if (isNewChat || isNearBottom || forceScrollRef.current) {
-        setTimeout(() => {
-          if (chatBottomRef.current) {
-            chatBottomRef.current.scrollIntoView({ behavior: 'instant' });
-          }
-        }, 60);
-        forceScrollRef.current = false;
+    const timer = setTimeout(() => {
+      const container = chatContainerRef.current;
+      if (container) {
+        container.scrollTop = container.scrollHeight;
       }
-    }
+      if (chatBottomRef.current) {
+        chatBottomRef.current.scrollIntoView({ behavior: 'instant', block: 'end' });
+      }
+    }, 80);
+
+    return () => clearTimeout(timer);
   }, [chatHistory, activeChatRecordId]);
 
   // Sync activeView to localStorage
