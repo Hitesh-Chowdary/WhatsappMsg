@@ -2241,13 +2241,22 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         }
 
     # 5. Check AI Knowledge Base (Brochures & Crawled Website Pages)
-    # Skip AI brochure search for stop/closing words
+    # Skip AI brochure search for stop/closing words & counselor request phrases
     if normalized_text in ["stop", "bye", "cancel", "exit", "quit", "unsubscribe", "optout"]:
         return {
             "reply_text": "Thank you! Feel free to reach out anytime if you need further assistance or information.",
             "buttons": ["Main Menu"],
             "media_url": None,
             "source_keyword": normalized_text
+        }
+
+    if any(phrase in normalized_text for phrase in ["contact staff", "call staff", "ask counselor", "contact counselor", "call counselor", "talk to staff"]):
+        record.parent_response = "Counselor Needed"
+        return {
+            "reply_text": "Thank you! Our admissions team has been notified, and an outreach counselor will assist you here shortly.",
+            "buttons": [],
+            "media_url": None,
+            "source_keyword": "contact_staff"
         }
 
     try:

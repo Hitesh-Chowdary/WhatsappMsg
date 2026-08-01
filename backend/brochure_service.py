@@ -118,42 +118,15 @@ Guidelines:
             response = model.generate_content(prompt)
             if response and response.text:
                 answer = response.text.strip()
-                return {
-                    "reply_text": answer,
-                    "source": "AI Brochure Engine (Gemini)",
-                    "buttons": ["Ask Counselor", "View Fee Structure"]
-                }
+                # Ensure we don't return raw scraped resource text
+                if not answer.startswith("===") and "Skip to content" not in answer:
+                    return {
+                        "reply_text": answer,
+                        "source": "AI Brochure Engine (Gemini)",
+                        "buttons": ["Ask Counselor", "View Fee Structure"]
+                    }
         except Exception as e:
-            logger.warning(f"Gemini API query failed, falling back to snippet matcher: {e}")
+            logger.warning(f"Gemini API query failed or disabled: {e}")
 
-    # 2. Smart Extractive Snippet Matching Fallback
-    keywords = [w.lower().strip() for w in re.findall(r'\w+', query_text) if len(w) > 3]
-    paragraphs = [p.strip() for p in combined_knowledge.split("\n\n") if len(p.strip()) > 30]
-
-    matched_paragraphs = []
-    for p in paragraphs:
-        p_lower = p.lower()
-        score = sum(1 for kw in keywords if kw in p_lower)
-        if score > 0:
-            matched_paragraphs.append((score, p))
-
-    matched_paragraphs.sort(key=lambda x: x[0], reverse=True)
-
-    if matched_paragraphs:
-        top_excerpts = [p for _, p in matched_paragraphs[:2]]
-        clean_excerpt = "\n\n".join(top_excerpts)
-        if len(clean_excerpt) > 600:
-            clean_excerpt = clean_excerpt[:600] + "..."
-
-        reply_text = (
-            f"Here is what our official brochure mentions regarding your query:\n\n"
-            f"{clean_excerpt}\n\n"
-            f"If you need further details or personalized assistance, feel free to ask!"
-        )
-        return {
-            "reply_text": reply_text,
-            "source": "AI Brochure Engine (Extractive)",
-            "buttons": ["Ask Counselor"]
-        }
-
+    # Do not dump raw scraped website text on WhatsApp. Return None to trigger clean counselor handover.
     return None
