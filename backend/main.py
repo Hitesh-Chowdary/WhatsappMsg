@@ -2288,7 +2288,7 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
     except Exception as e:
         logger.error(f"Error querying AI Knowledge Engine: {e}")
 
-    # 6. Default Fallback Rule
+    # 6. Default Fallback Rule or Friendly Counselor Handover Reply
     default_rule = next((r for r in all_rules if r.keyword == "default"), None)
     if default_rule:
         return {
@@ -2298,7 +2298,13 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
             "source_keyword": default_rule.keyword
         }
         
-    return None
+    record.parent_response = "Counselor Needed"
+    return {
+        "reply_text": f"Thank you for your inquiry regarding *{message_text.strip()}*! Our admissions team has been notified, and an outreach counselor will assist you here shortly.",
+        "buttons": ["Ask Counselor"],
+        "media_url": None,
+        "source_keyword": "unhandled_inquiry"
+    }
 
 def resolve_template_text(template_text: Optional[str], record, merged_vars: dict) -> str:
     if not template_text:
@@ -2579,7 +2585,8 @@ async def handle_incoming_text_reply(
             sender="system",
             message_text=reply_text,
             media_url=media_url,
-            message_id=auto_msg_id
+            message_id=auto_msg_id,
+            recipient_type=sender
         )
         db.add(auto_chat_msg)
         

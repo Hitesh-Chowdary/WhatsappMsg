@@ -606,6 +606,7 @@ function App() {
   const [chatStatusFilter, setChatStatusFilter] = useState('all');
   const [typedMessage, setTypedMessage] = useState('');
   const [activeChatSubTab, setActiveChatSubTab] = useState('chat');
+  const [chatThreadFilter, setChatThreadFilter] = useState('all'); // 'all', 'parent', 'student'
   const [selectedChatTemplate, setSelectedChatTemplate] = useState('');
   const [forceFreeForm, setForceFreeForm] = useState(false);
   const [sendingChat, setSendingChat] = useState(false);
@@ -1304,17 +1305,28 @@ function App() {
     pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter };
   }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter]);
 
-  // Auto-scroll to the bottom of chat messages intelligently
+  const forceChatScrollRef = useRef(false);
+
+  // Auto-scroll to the bottom of chat messages intelligently (does not interrupt manual scroll-up)
   useEffect(() => {
     if (!activeChatRecordId) return;
 
     const timer = setTimeout(() => {
       const container = chatContainerRef.current;
       if (container) {
-        container.scrollTop = container.scrollHeight;
-      }
-      if (chatBottomRef.current) {
-        chatBottomRef.current.scrollIntoView({ behavior: 'instant', block: 'end' });
+        const isNewChat = prevActiveChatRecordIdRef.current !== activeChatRecordId;
+        prevActiveChatRecordIdRef.current = activeChatRecordId;
+
+        const threshold = 120;
+        const isNearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) <= threshold;
+
+        if (isNewChat || isNearBottom || forceChatScrollRef.current) {
+          container.scrollTop = container.scrollHeight;
+          if (chatBottomRef.current) {
+            chatBottomRef.current.scrollIntoView({ behavior: 'instant', block: 'end' });
+          }
+          forceChatScrollRef.current = false;
+        }
       }
     }, 80);
 
@@ -4313,10 +4325,7 @@ function App() {
                         borderBottom: activeChatSubTab === 'notes' ? '2px solid var(--color-blue)' : 'none',
                         background: 'transparent',
                         cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        borderTop: 'none',
-                        borderLeft: 'none',
-                        borderRight: 'none'
+                        transition: 'all 0.2s'
                       }}
                     >
                       📝 Counselor Notes {chatNotes.filter(n => !n.resolved).length > 0 ? `(${chatNotes.filter(n => !n.resolved).length})` : ''}
@@ -4325,8 +4334,72 @@ function App() {
 
                   {activeChatSubTab === 'chat' ? (
                     <>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 1rem', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', fontSize: '0.78rem' }}>
+                        <span style={{ fontWeight: 600, color: '#64748b' }}>Thread Filter:</span>
+                        <div style={{ display: 'flex', gap: '0.3rem' }}>
+                          <button
+                            type="button"
+                            onClick={() => setChatThreadFilter('all')}
+                            style={{
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '12px',
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              border: 'none',
+                              cursor: 'pointer',
+                              background: chatThreadFilter === 'all' ? '#2563eb' : '#e2e8f0',
+                              color: chatThreadFilter === 'all' ? '#ffffff' : '#475569'
+                            }}
+                          >
+                            Unified Thread
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setChatThreadFilter('parent')}
+                            style={{
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '12px',
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              border: 'none',
+                              cursor: 'pointer',
+                              background: chatThreadFilter === 'parent' ? '#2563eb' : '#e2e8f0',
+                              color: chatThreadFilter === 'parent' ? '#ffffff' : '#475569'
+                            }}
+                          >
+                            👨‍👩‍👦 Parent Chat
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setChatThreadFilter('student')}
+                            style={{
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '12px',
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              border: 'none',
+                              cursor: 'pointer',
+                              background: chatThreadFilter === 'student' ? '#2563eb' : '#e2e8f0',
+                              color: chatThreadFilter === 'student' ? '#ffffff' : '#475569'
+                            }}
+                          >
+                            🎓 Student Chat
+                          </button>
+                        </div>
+                      </div>
+
                       <div className="chat-messages-area" ref={chatContainerRef}>
-                        {chatHistory.map((msg, index) => {
+                        {chatHistory
+                          .filter(msg => {
+                            if (chatThreadFilter === 'parent') {
+                              return msg.sender === 'parent' || msg.recipient_type === 'parent';
+                            }
+                            if (chatThreadFilter === 'student') {
+                              return msg.sender === 'student' || msg.recipient_type === 'student';
+                            }
+                            return true;
+                          })
+                          .map((msg, index) => {
                           const bubbleClass = (msg.sender === 'parent' || msg.sender === 'student') ? 'parent' : msg.sender === 'counselor' ? 'counselor' : 'system';
                           let senderLabel = '';
                           if (msg.sender === 'parent') {
@@ -4342,7 +4415,7 @@ function App() {
                           
                           // Determine WhatsApp-style status checkmark SVG
                           let statusTick = null;
-                          if (msg.sender !== 'parent') {
+                          if (msg.sender !== 'parent' && msg.sender !== 'student') {
                             const status = (msg.delivery_status || 'sent').toLowerCase();
                             if (status === 'read') {
                               statusTick = (
