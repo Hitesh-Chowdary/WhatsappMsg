@@ -608,7 +608,7 @@ async def get_current_user(
 
 class CreateUserPayload(BaseModel):
     full_name: str = Field(..., description="Staff member full name")
-    email: EmailStr = Field(..., description="Staff member work email")
+    email: str = Field(..., description="Staff member work email")
     username: str = Field(..., description="Unique login username")
     password: str = Field(..., min_length=4, description="Login password")
     role: Optional[str] = Field("counselor", description="'super_admin' or 'counselor'")
@@ -2733,15 +2733,16 @@ async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db))
         # Fallback parsing as WebhookPayload for mock/developer simulation testing
         try:
             payload_obj = WebhookPayload(**body)
-            if payload_obj.event == "incoming_text":
-                phone = payload_obj.from_phone or "919999999999"
-                text_content = payload_obj.text_body or "hello"
-                return await handle_incoming_text_reply(
-                    from_phone=phone,
-                    message_text=text_content,
-                    message_id=payload_obj.message_id,
-                    db=db
-                )
+            if payload_obj.event == "incoming_text" and payload_obj.text_body and payload_obj.from_phone:
+                phone = payload_obj.from_phone.strip()
+                text_content = payload_obj.text_body.strip()
+                if phone and text_content:
+                    return await handle_incoming_text_reply(
+                        from_phone=phone,
+                        message_text=text_content,
+                        message_id=payload_obj.message_id,
+                        db=db
+                    )
             else:
                 # legacy events (status_update, quick_reply)
                 return await process_webhook_event(
@@ -3551,10 +3552,10 @@ async def get_chat_history(
     session_expires_at = None
     time_remaining_seconds = 0
     
-    # Find the last message sent by the parent
-    last_parent_msg = next((msg for msg in reversed(messages) if msg.sender == "parent"), None)
-    if last_parent_msg:
-        msg_created = last_parent_msg.created_at
+    # Find the last message sent by the candidate (parent or student)
+    last_user_msg = next((msg for msg in reversed(messages) if msg.sender in ["parent", "student"]), None)
+    if last_user_msg:
+        msg_created = last_user_msg.created_at
         if msg_created.tzinfo is not None:
             from datetime import timezone
             now_utc = datetime.now(timezone.utc)
@@ -3565,7 +3566,7 @@ async def get_chat_history(
         if diff_seconds < 86400: # 24 hours
             session_active = True
             time_remaining_seconds = int(86400 - diff_seconds)
-            session_expires_at = (last_parent_msg.created_at + timedelta(hours=24)).isoformat()
+            session_expires_at = (last_user_msg.created_at + timedelta(hours=24)).isoformat()
             
     # Reset unread count to 0 when history is fetched by counselor
     rec_stmt = select(Record).where(Record.id == record_id)

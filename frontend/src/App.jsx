@@ -326,7 +326,15 @@ function App() {
         })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to create staff member account.");
+      if (!res.ok) {
+        let errStr = "Failed to create staff member account.";
+        if (typeof data.detail === 'string') {
+          errStr = data.detail;
+        } else if (Array.isArray(data.detail)) {
+          errStr = data.detail.map(d => d.msg || JSON.stringify(d)).join(', ');
+        }
+        throw new Error(errStr);
+      }
       triggerToast(`Staff account created for ${data.user.full_name}!`, "success");
       setNewStaffFullName('');
       setNewStaffEmail('');
@@ -335,7 +343,7 @@ function App() {
       setNewStaffRole('counselor');
       fetchTeamUsers();
     } catch (err) {
-      triggerToast(err.message, "error");
+      triggerToast(err.message || "Error creating staff account.", "error");
     } finally {
       setCreatingUser(false);
     }
