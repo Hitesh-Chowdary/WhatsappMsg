@@ -128,5 +128,47 @@ Guidelines:
         except Exception as e:
             logger.warning(f"Gemini API query failed or disabled: {e}")
 
-    # Do not dump raw scraped website text on WhatsApp. Return None to trigger clean counselor handover.
+    # 2. Clean Extractive Fallback for Uploaded PDFs & Documents
+    keywords = [w.lower().strip() for w in re.findall(r'\w+', query_text) if len(w) > 2]
+    
+    clean_matches = []
+    for doc in all_docs:
+        doc_text = getattr(doc, "extracted_text", "")
+        if not doc_text:
+            continue
+        # Split into paragraphs/lines
+        paras = [p.strip() for p in re.split(r'[\n\r]+', doc_text) if len(p.strip()) > 15]
+        for p in paras:
+            p_lower = p.lower()
+            # Ignore noise lines
+            if any(noise in p_lower for noise in ["skip to content", "public self disclosure", "s.no title", "links on website"]):
+                continue
+            match_score = sum(1 for kw in keywords if kw in p_lower)
+            if match_score > 0:
+                clean_matches.append((match_score, p))
+
+    if clean_matches:
+        clean_matches.sort(key=lambda x: x[0], reverse=True)
+        # Take top 2-3 clean relevant paragraphs
+        top_excerpts = []
+        seen = set()
+        for _, text in clean_matches:
+            if text not in seen:
+                seen.add(text)
+                top_excerpts.append(text)
+            if len(top_excerpts) >= 3:
+                break
+                
+        bullet_content = "\n\n• ".join(top_excerpts)
+        reply_text = (
+            f"Here is what our document mentions regarding *{query_text.strip()}*:\n\n"
+            f"• {bullet_content}\n\n"
+            f"If you need further details, feel free to ask or connect with a counselor!"
+        )
+        return {
+            "reply_text": reply_text,
+            "source": "Document Knowledge Base",
+            "buttons": ["Ask Counselor"]
+        }
+
     return None
