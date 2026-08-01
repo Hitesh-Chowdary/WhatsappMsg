@@ -19,12 +19,24 @@ def extract_text_from_file(file_path: str, filename: str) -> str:
             import fitz
             doc = fitz.open(file_path)
             for page in doc:
-                text += page.get_text() + "\n"
+                text += page.get_text("text") + "\n"
         except Exception as e:
             logger.warning(f"fitz PDF extraction failed for {filename}: {e}")
 
-        # 2. Fallback to pypdf if text is empty or fitz failed
-        if not text.strip():
+        # 2. Try pdfplumber if fitz produced empty or short text
+        if len(text.strip()) < 20:
+            try:
+                import pdfplumber
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+            except Exception as e:
+                logger.warning(f"pdfplumber extraction failed for {filename}: {e}")
+
+        # 3. Fallback to pypdf if text is still empty
+        if len(text.strip()) < 20:
             try:
                 import pypdf
                 reader = pypdf.PdfReader(file_path)
@@ -45,7 +57,8 @@ def extract_text_from_file(file_path: str, filename: str) -> str:
         except Exception as e:
             logger.error(f"Failed to read text file {filename}: {e}")
 
-    # Clean whitespace
+    # Remove null bytes & clean whitespace
+    text = text.replace("\x00", "")
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text
 

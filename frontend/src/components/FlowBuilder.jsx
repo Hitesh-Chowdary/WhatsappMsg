@@ -716,6 +716,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
             flowToLoad = data.find(f => f.is_active) || data[0];
           }
           
+          loadedFlowIdRef.current = flowToLoad.id;
           setCurrentFlow(flowToLoad);
           const fNodes = flowToLoad.flow_data?.nodes || [];
           const fEdges = flowToLoad.flow_data?.edges || [];
@@ -798,9 +799,13 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
     }
   }, [reactFlowInstance]);
 
+  const loadedFlowIdRef = useRef(null);
+
   // Auto-Save Effect (Debounced to 1.5s after last modification)
   useEffect(() => {
     if (loading || nodes.length === 0 || !autoSaveEnabled || !currentFlow) return;
+    // Guard against saving when currentFlow and canvas nodes are out of sync during flow switches
+    if (currentFlow.id !== loadedFlowIdRef.current) return;
 
     const autoSaveTimeout = setTimeout(async () => {
       setSaving(true);
@@ -826,6 +831,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
           
           // If this was a new flow (id was null), update its ID so we don't keep recreating it
           if (currentFlow.id === null && result.flow) {
+            loadedFlowIdRef.current = result.flow.id;
             setCurrentFlow(result.flow);
             // Refresh list in background
             const listRes = await authFetch(`${API_BASE}/api/v1/bot/flows`);
@@ -1202,6 +1208,7 @@ export default function FlowBuilder({ authFetch, API_BASE, activeView, templates
         if (!confirmed) return;
       }
     }
+    loadedFlowIdRef.current = flow.id;
     setCurrentFlow(flow);
     setNodes(flow.flow_data?.nodes || []);
     setEdges(flow.flow_data?.edges || []);

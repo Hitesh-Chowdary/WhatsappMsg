@@ -1897,7 +1897,12 @@ async def process_webhook_event(
     chat_res = await db.execute(chat_stmt)
     chat_message = chat_res.scalars().first()
     
-    if not log and not chat_message:
+    # 3. Try to find directly in Record
+    rec_stmt = select(Record).where(Record.message_id == message_id)
+    rec_res = await db.execute(rec_stmt)
+    rec = rec_res.scalars().first()
+    
+    if not log and not chat_message and not rec:
         logger.warning(f"Webhook event ignored: message_id '{message_id}' not found in database.")
         return {"status": "ignored", "reason": "unknown_message_id"}
         
@@ -1907,16 +1912,14 @@ async def process_webhook_event(
             if chat_message:
                 chat_message.delivery_status = status_val
                 
+            display_status = status_val.capitalize()
+            if status_val == "read":
+                display_status = "Read"
+            elif status_val == "failed":
+                display_status = "Failed"
+
             if log:
-                if status_val == "read":
-                    display_status = "Read"
-                elif status_val == "failed":
-                    display_status = "Failed"
-                else:
-                    display_status = status_val.capitalize()
-                    
                 log.delivery_status = display_status
-                
                 if status_val == "sent":
                     log.campaign_status = "Sent"
                 elif status_val == "delivered":
@@ -1930,69 +1933,51 @@ async def process_webhook_event(
                     log.campaign_status = "Sent"
                 elif status_val == "failed":
                     log.campaign_status = "Failed"
-                    log.parent_response = "No Response"
-                    log.delivered_at = None
-                    log.read_at = None
-                    log.responded_at = None
-                    
-    elif event == "quick_reply":
-        if log:
-            if button_text in ["Interested", "Not Interested"]:
-                log.parent_response = button_text
-                log.responded_at = datetime.utcnow()
+
+            # Always update Record if found directly or via log
+            target_record = rec
+            if not target_record and log:
+                r_stmt = select(Record).where(Record.id == log.record_id)
+                r_res = await db.execute(r_stmt)
+                target_record = r_res.scalars().first()
                 
-                log.delivery_status = "Read"
-                log.campaign_status = "Sent"
-                if not log.delivered_at:
-                    log.delivered_at = datetime.utcnow()
-                if not log.read_at:
-                    log.read_at = datetime.utcnow()
+            if target_record:
+                target_record.delivery_status = display_status
+                if status_val in ["sent", "delivered", "read"]:
+                    target_record.campaign_status = "Sent"
+                if status_val == "delivered" and not target_record.delivered_at:
+                    target_record.delivered_at = datetime.utcnow()
+                elif status_val == "read":
+                    if not target_record.delivered_at:
+                        target_record.delivered_at = datetime.utcnow()
+                    target_record.read_at = datetime.utcnow()
                     
-                # Log quick reply in chat history
+            await db.commit()
+            logger.info(f"Updated status for message_id {message_id} to {status_val}")
+            return {"status": "success"}
+
+    elif event == "quick_reply":
+        target_rec_id = log.record_id if log else (chat_message.record_id if chat_message else (rec.id if rec else None))
+        if target_rec_id:
+            r_stmt = select(Record).where(Record.id == target_rec_id)
+            r_res = await db.execute(r_stmt)
+            target_record = r_res.scalars().first()
+            if target_record:
+                target_record.parent_response = button_text
+                target_record.responded_at = datetime.utcnow()
+                target_record.delivery_status = "Read"
+                
                 chat_msg = ChatMessage(
-                    record_id=log.record_id,
+                    record_id=target_record.id,
                     sender="parent",
-                    message_text=button_text,
-                    message_id=f"qr_{message_id}"
+                    message_text=button_text or "Quick Reply",
+                    message_id=f"qr_{message_id}",
+                    recipient_type="parent"
                 )
                 db.add(chat_msg)
-            
-    # Mirror updates to the legacy Record table so direct database checks are synced
-    if log:
-        rec_stmt = select(Record).where(Record.id == log.record_id)
-        rec_res = await db.execute(rec_stmt)
-        rec = rec_res.scalars().first()
-        if rec:
-            old_parent_response = rec.parent_response
-            rec.campaign_status = log.campaign_status
-            rec.delivery_status = log.delivery_status
-            rec.parent_response = log.parent_response
-            rec.message_id = log.message_id
-            rec.sent_template = log.template_name
-            rec.sent_at = log.sent_at
-            rec.delivered_at = log.delivered_at
-            rec.read_at = log.read_at
-            rec.responded_at = log.responded_at
-            
-            # Auto-tag based on parent response transitions
-            if rec.parent_response == "Not Interested":
-                rec.pipeline_tag = "Not Interested"
-            elif rec.parent_response == "Interested" and old_parent_response == "Not Interested":
-                rec.pipeline_tag = None
-                
-            detect_and_save_call_request(rec, button_text)
-            
-    await db.commit()
-    logger.info("Updated ChatMessage/CampaignLog status via webhook callback processing.")
-    
-    # Trigger auto-response for quick replies (Interested, Not Interested)
-    if log and event == "quick_reply" and button_text in ["Interested", "Not Interested"]:
-        try:
-            await handle_quick_reply_auto_response(log.record_id, button_text, db)
-        except Exception as e:
-            logger.error(f"Error triggering quick reply auto response: {e}")
-            
-    return {"status": "success", "record_id": log.record_id if log else chat_message.record_id}
+                await db.commit()
+                logger.info(f"Quick reply '{button_text}' logged for record ID {target_record.id}")
+                return {"status": "success", "record_id": target_record.id}
 
 # Helper to process incoming quick reply button clicks (e.g. Interested, Not Interested) and trigger auto-response
 async def handle_quick_reply_auto_response(
