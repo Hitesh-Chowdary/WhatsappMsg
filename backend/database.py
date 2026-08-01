@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
-from sqlalchemy import String, DateTime, func, text, Boolean, ForeignKey, JSON
+from sqlalchemy import String, DateTime, func, text, Boolean, ForeignKey, JSON, Text, Integer
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -78,6 +78,7 @@ class Record(Base):
     parent_name: Mapped[str] = mapped_column(String(255), nullable=False)
     selected_branch: Mapped[str] = mapped_column(String(255), nullable=False)
     phone_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    parent_phone_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     
     # Statuses
     campaign_status: Mapped[str] = mapped_column(String(50), default="Pending")
@@ -93,6 +94,12 @@ class Record(Base):
     
     # Tagging/Pipeline state (e.g. Lead, Contacted, Interested, Enrolled)
     pipeline_tag: Mapped[Optional[str]] = mapped_column(String(50), default=None, nullable=True)
+    
+    # Counselor Lead Assignment & Notes
+    assigned_counselor_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    assigned_counselor_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    counselor_notes: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    counselor_status: Mapped[Optional[str]] = mapped_column(String(50), default="active", nullable=True)
     
     # Timestamps
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -113,12 +120,17 @@ class Record(Base):
             "parent_name": self.parent_name,
             "selected_branch": self.selected_branch,
             "phone_number": self.phone_number,
+            "parent_phone_number": self.parent_phone_number,
             "campaign_status": self.campaign_status,
             "delivery_status": self.delivery_status,
             "parent_response": self.parent_response,
             "message_id": self.message_id,
             "sent_template": self.sent_template,
             "pipeline_tag": self.pipeline_tag or "Lead",
+            "assigned_counselor_id": self.assigned_counselor_id,
+            "assigned_counselor_name": self.assigned_counselor_name,
+            "counselor_notes": self.counselor_notes,
+            "counselor_status": self.counselor_status or "active",
             "sent_at": self.sent_at.isoformat() if self.sent_at else None,
             "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
             "read_at": self.read_at.isoformat() if self.read_at else None,
@@ -134,6 +146,7 @@ class CampaignLog(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     record_id: Mapped[int] = mapped_column(ForeignKey("records.id", ondelete="CASCADE"), nullable=False, index=True)
     template_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    recipient_type: Mapped[Optional[str]] = mapped_column(String(50), default="parent", server_default="parent", nullable=True)
     
     campaign_status: Mapped[str] = mapped_column(String(50), default="Pending")
     delivery_status: Mapped[str] = mapped_column(String(50), default="Unsent")
@@ -156,6 +169,7 @@ class CampaignLog(Base):
             "id": self.id,
             "record_id": self.record_id,
             "template_name": self.template_name,
+            "recipient_type": self.recipient_type,
             "campaign_status": self.campaign_status,
             "delivery_status": self.delivery_status,
             "parent_response": self.parent_response,
@@ -191,7 +205,27 @@ class AdminUser(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), default="System Administrator", server_default="System Administrator", nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[Optional[str]] = mapped_column(String(50), default="super_admin", server_default="super_admin", nullable=True)
+    is_active: Mapped[Optional[bool]] = mapped_column(Boolean, default=True, server_default="true", nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "email": self.email or f"{self.username}@institution.edu.in",
+            "full_name": self.full_name or self.username.capitalize(),
+            "role": self.role or "super_admin",
+            "is_active": self.is_active if self.is_active is not None else True,
+            "created_at": self.created_at.isoformat() if hasattr(self, "created_at") and self.created_at else None
+        }
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
@@ -202,6 +236,8 @@ class ChatMessage(Base):
     message_text: Mapped[str] = mapped_column(String, nullable=False)
     media_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     message_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    delivery_status: Mapped[Optional[str]] = mapped_column(String(50), default="sent", server_default="sent", nullable=True)
+    recipient_type: Mapped[Optional[str]] = mapped_column(String(50), default="parent", server_default="parent", nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
         server_default=func.now(),
@@ -216,6 +252,8 @@ class ChatMessage(Base):
             "message_text": self.message_text,
             "media_url": self.media_url,
             "message_id": self.message_id,
+            "delivery_status": self.delivery_status,
+            "recipient_type": self.recipient_type,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
 
@@ -296,6 +334,62 @@ class BotFlow(Base):
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
 
+class BrochureDocument(Base):
+    __tablename__ = "brochure_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    extracted_text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        text_preview = self.extracted_text[:300] + "..." if self.extracted_text and len(self.extracted_text) > 300 else self.extracted_text
+        return {
+            "id": self.id,
+            "title": self.title,
+            "filename": self.filename,
+            "file_path": self.file_path,
+            "is_active": self.is_active,
+            "extracted_text": self.extracted_text,
+            "text_preview": text_preview,
+            "uploaded_at": self.uploaded_at.isoformat() if self.uploaded_at else None
+        }
+
+class WebsiteKnowledge(Base):
+    __tablename__ = "website_knowledge"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    extracted_text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    crawled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
+
+    def to_dict(self):
+        text_preview = self.extracted_text[:300] + "..." if self.extracted_text and len(self.extracted_text) > 300 else self.extracted_text
+        return {
+            "id": self.id,
+            "url": self.url,
+            "domain": self.domain,
+            "title": self.title,
+            "is_active": self.is_active,
+            "extracted_text": self.extracted_text,
+            "text_preview": text_preview,
+            "crawled_at": self.crawled_at.isoformat() if self.crawled_at else None
+        }
+
 async def init_db():
     """Initializes the database schema by creating required tables and seeding default template."""
     async with engine.begin() as conn:
@@ -314,6 +408,21 @@ async def init_db():
         await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS pipeline_tag VARCHAR(50) DEFAULT 'Lead'"))
         await conn.execute(text("ALTER TABLE record_notes ADD COLUMN IF NOT EXISTS resolved BOOLEAN DEFAULT false"))
         await conn.execute(text("ALTER TABLE bot_flows ADD COLUMN IF NOT EXISTS template_name VARCHAR(255)"))
+        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS parent_phone_number VARCHAR(50)"))
+        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS assigned_counselor_id INTEGER"))
+        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS assigned_counselor_name VARCHAR(255)"))
+        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS counselor_notes TEXT"))
+        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS counselor_status VARCHAR(50) DEFAULT 'active'"))
+        await conn.execute(text("ALTER TABLE campaign_logs ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(50) DEFAULT 'parent'"))
+        await conn.execute(text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(50) DEFAULT 'parent'"))
+        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS email VARCHAR(255)"))
+        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255) DEFAULT 'System Administrator'"))
+        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'super_admin'"))
+        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true"))
+        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+        await conn.execute(text("UPDATE admin_users SET email = 'admin@institution.edu.in' WHERE email IS NULL AND username = 'admin'"))
+        await conn.execute(text("UPDATE admin_users SET full_name = 'System Administrator' WHERE full_name IS NULL AND username = 'admin'"))
+        await conn.execute(text("UPDATE admin_users SET role = 'super_admin' WHERE role IS NULL AND username = 'admin'"))
         
     # Seed default templates if empty
     async with AsyncSessionLocal() as session:
@@ -333,26 +442,27 @@ async def init_db():
 
     # Seed default admin user
     async with AsyncSessionLocal() as session:
-        from sqlalchemy import select, delete
+        from sqlalchemy import select
         import bcrypt
         
-        # Delete any admin user that is not 'admin' to ensure only one admin exists
-        await session.execute(delete(AdminUser).where(AdminUser.username != "admin"))
-        
-        # Check if 'admin' user exists
-        stmt = select(AdminUser).where(AdminUser.username == "admin")
+        # Check if ANY admin user exists in the database
+        stmt = select(AdminUser).limit(1)
         result = await session.execute(stmt)
-        admin_user = result.scalar_one_or_none()
+        existing_user = result.scalars().first()
         
-        # Seed or reset credentials to admin / admin123
-        hashed = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-        if not admin_user:
-            admin_user = AdminUser(username="admin", hashed_password=hashed)
-            session.add(admin_user)
-        else:
-            admin_user.hashed_password = hashed
-            
-        await session.commit()
+        # Only seed if no users exist in the admin_users table
+        if not existing_user:
+            hashed = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            default_admin = AdminUser(
+                username="admin",
+                email="admin@institution.edu.in",
+                full_name="System Administrator",
+                role="super_admin",
+                hashed_password=hashed,
+                is_active=True
+            )
+            session.add(default_admin)
+            await session.commit()
 
         # Migrate legacy records to campaign_logs
         stmt = select(Record).where(Record.sent_template != None)

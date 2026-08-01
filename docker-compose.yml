@@ -1,42 +1,30 @@
 version: '3.8'
 
 services:
-  db:
-    image: postgres:16-alpine
-    container_name: whatsapp_crm_db
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: whatsapp_crm
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
   web:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: whatsapp_crm_web
+    container_name: whatsapp_crm_web_instance2
     restart: always
     # CRITICAL: Binds container virtual network interface card to the licensed MAC address expected by PyArmor
     mac_address: 44:f7:9f:db:15:c1
     ports:
-      - "8000:8000"
-    depends_on:
-      - db
+      - "127.0.0.1:8001:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/whatsapp_crm
-      - WHATSAPP_CLIENT_TYPE=meta_cloud
-      - META_ACCESS_TOKEN=your_permanent_meta_access_token_here
-      - META_PHONE_NUMBER_ID=your_meta_phone_number_id_here
-      - WHATSAPP_VERIFY_TOKEN=your_secret_webhook_verify_token_here
-      - JWT_SECRET=change_me_to_a_random_secret_in_production
+      - DATABASE_URL=${DATABASE_URL}
+      - WHATSAPP_CLIENT_TYPE=${WHATSAPP_CLIENT_TYPE:-meta_cloud}
+      - META_ACCESS_TOKEN=${META_ACCESS_TOKEN}
+      - META_PHONE_NUMBER_ID=${META_PHONE_NUMBER_ID}
+      - META_BUSINESS_ACCOUNT_ID=${META_BUSINESS_ACCOUNT_ID}
+      - WHATSAPP_WEBHOOK_VERIFY_TOKEN=${WHATSAPP_WEBHOOK_VERIFY_TOKEN}
+      - JWT_SECRET=${JWT_SECRET:-change_me_to_a_random_secret_in_production}
+      - META_APP_SECRET=${META_APP_SECRET}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - PUBLIC_APP_URL=${PUBLIC_APP_URL}
     volumes:
       # Persistent volume mapping for uploaded media brochures and PDFs
-      - media_data:/app/frontend/static/media
+      - media_data_instance2:/app/frontend/static/media
 
 volumes:
-  postgres_data:
-  media_data:
+  media_data_instance2:

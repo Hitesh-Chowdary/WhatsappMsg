@@ -6,7 +6,7 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Secure Python Runtime
+# Stage 2: Python Runtime (Unprotected Developer Mode)
 FROM python:3.10-slim
 WORKDIR /app
 
@@ -21,9 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy Python backend application code and password reset helper
-COPY backend/ ./backend/
-COPY reset_password.py ./reset_password.py
+# Copy RAW Python backend code for local testing (No PyArmor license required)
+COPY backend/ ./backend
 
 # Copy built frontend assets
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
@@ -40,5 +39,5 @@ RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8000
 
-# Set secure execution entrypoint
+# Set execution entrypoint
 ENTRYPOINT ["/app/entrypoint.sh"]

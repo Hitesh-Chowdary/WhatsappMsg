@@ -7,8 +7,10 @@ CREATE TABLE IF NOT EXISTS records (
     campaign_status VARCHAR(50) DEFAULT 'Pending',
     delivery_status VARCHAR(50) DEFAULT 'Unsent',
     parent_response VARCHAR(50) DEFAULT 'No Response',
+    variables JSON DEFAULT '{}',
     message_id VARCHAR(255) UNIQUE NULL,
     sent_template VARCHAR(255) NULL,
+    pipeline_tag VARCHAR(50) DEFAULT 'Lead',
     sent_at TIMESTAMP WITH TIME ZONE NULL,
     delivered_at TIMESTAMP WITH TIME ZONE NULL,
     read_at TIMESTAMP WITH TIME ZONE NULL,
@@ -76,4 +78,25 @@ CREATE TABLE IF NOT EXISTS auto_reply_rules (
     reply_text TEXT NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS record_notes (
+    id SERIAL PRIMARY KEY,
+    record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+    note_text VARCHAR(1000) NOT NULL,
+    created_by VARCHAR(100) DEFAULT 'Counselor',
+    resolved BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_record_notes_record_id ON record_notes (record_id);
+
+CREATE TABLE IF NOT EXISTS bot_flows (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) DEFAULT 'Default Flow',
+    flow_data JSON NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    template_name VARCHAR(255) NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );

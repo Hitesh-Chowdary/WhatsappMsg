@@ -31,3 +31,8 @@ dist-ssr/
 *.njsproj
 *.sln
 *.sw?
+
+# Scratch & Local DBs
+scratch/
+*.db
+

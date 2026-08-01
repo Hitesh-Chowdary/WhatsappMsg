@@ -6,12 +6,12 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Query, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 import pandas as pd
 from sqlalchemy import select, func, or_, and_, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -24,7 +24,7 @@ PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 if BACKEND_DIR not in sys.path:
     sys.path.append(BACKEND_DIR)
 
-from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser, CampaignLog, ChatMessage, AutoReplyRule, RecordNote, BotFlow
+from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser, CampaignLog, ChatMessage, AutoReplyRule, RecordNote, BotFlow, BrochureDocument, WebsiteKnowledge
 from whatsapp_service import get_whatsapp_client, WhatsAppClient
 
 # Configure logging
@@ -60,20 +60,33 @@ class SetActiveTemplatePayload(BaseModel):
 class AddTemplatePayload(BaseModel):
     template_name: str = Field(..., description="Name of the template to fetch from Meta and add to the database")
 
+class BroadcastCampaignPayload(BaseModel):
+    recipient_type: str = "parent"
+
+class CrawlWebsitePayload(BaseModel):
+    url: str = Field(..., description="Target website URL (e.g. https://rvrnriuniversity.edu.in/)")
+    max_pages: Optional[int] = Field(25, ge=1, le=100, description="Maximum number of pages to crawl")
+
 class BulkSendPayload(BaseModel):
     record_ids: List[int]
     template_name: Optional[str] = None
+    recipient_type: str = "parent"
 
 class SendMessagePayload(BaseModel):
     record_id: int
     message_text: str
+    recipient_type: str = "parent"
 
 class SendTemplatePayload(BaseModel):
     record_id: int
     template_name: str
+    recipient_type: str = "parent"
 
 class UpdateTagPayload(BaseModel):
     pipeline_tag: str
+
+class UpdateCounselorStatusPayload(BaseModel):
+    counselor_status: str
 
 class AddNotePayload(BaseModel):
     note_text: str
@@ -94,6 +107,7 @@ class ContactCreatePayload(BaseModel):
     student_name: str
     parent_name: str
     phone_number: str
+    parent_phone_number: Optional[str] = None
     selected_branch: str
     pipeline_tag: Optional[str] = "Lead"
 
@@ -101,11 +115,12 @@ class ContactUpdatePayload(BaseModel):
     student_name: Optional[str] = None
     parent_name: Optional[str] = None
     phone_number: Optional[str] = None
+    parent_phone_number: Optional[str] = None
     selected_branch: Optional[str] = None
     pipeline_tag: Optional[str] = None
 
 # Background task for bulk message broadcasting
-async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppClient, base_url: Optional[str] = None):
+async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppClient, base_url: Optional[str] = None, recipient_type: str = "parent"):
     logger.info("Starting background campaign broadcast...")
     async with db_session_factory() as db:
         # Fetch the active template text
@@ -149,14 +164,25 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         pending_records = result.scalars().all()
         
         logger.info(f"Found {len(pending_records)} pending records to send.")
-        for record in pending_records:
-            # Skip if confirmed Interested on this template
+        
+        # Optimize N+1 queries by bulk fetching existing logs in a single query
+        record_ids = [r.id for r in pending_records]
+        existing_logs = {}
+        if record_ids:
             log_stmt = select(CampaignLog).where(
-                CampaignLog.record_id == record.id,
-                CampaignLog.template_name == template_name
+                and_(
+                    CampaignLog.record_id.in_(record_ids),
+                    CampaignLog.template_name == template_name
+                )
             )
             log_res = await db.execute(log_stmt)
-            log_obj = log_res.scalars().first()
+            for l_obj in log_res.scalars().all():
+                existing_logs[l_obj.record_id] = l_obj
+
+        import asyncio
+        for record in pending_records:
+            # Skip if confirmed Interested on this template
+            log_obj = existing_logs.get(record.id)
             if log_obj and log_obj.parent_response == "Interested":
                 continue
 
@@ -164,11 +190,14 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 log_obj = CampaignLog(
                     record_id=record.id,
                     template_name=template_name,
+                    recipient_type=recipient_type,
                     campaign_status="Pending",
                     delivery_status="Unsent",
                     parent_response="No Response"
                 )
                 db.add(log_obj)
+            else:
+                log_obj.recipient_type = recipient_type
 
             try:
                 # Merge spreadsheet custom fields with default fallback mapping
@@ -187,8 +216,14 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 # Compile template variables dynamically
                 msg_body = resolve_template_text(template_text, record, merged_vars)
 
+                # Route to student or parent number based on recipient_type
+                target_phone = record.parent_phone_number if recipient_type == "parent" else record.phone_number
+                # Fallback to student phone if parent phone is None
+                if recipient_type == "parent" and not target_phone:
+                    target_phone = record.phone_number
+
                 response = await whatsapp_client.send_message(
-                    to_phone=record.phone_number,
+                    to_phone=target_phone,
                     message_body=msg_body,
                     media_type=media_type,
                     media_url=media_url,
@@ -210,17 +245,18 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     # Log message in chat history
                     chat_msg = ChatMessage(
                         record_id=record.id,
-                        sender="system",
+                        sender="outreach",
                         message_text=msg_body or f"Template Outreach: {template_name}",
                         media_url=media_url if media_type != "none" else None,
-                        message_id=response.get("message_id")
+                        message_id=response.get("message_id"),
+                        recipient_type=recipient_type
                     )
                     db.add(chat_msg)
                 else:
                     log_obj.campaign_status = "Failed"
                     log_obj.delivery_status = "Failed"
             except Exception as e:
-                logger.error(f"Error broadcasting to {record.phone_number} (ID: {record.id}): {e}")
+                logger.error(f"Error broadcasting to {target_phone} (ID: {record.id}): {e}")
                 log_obj.campaign_status = "Failed"
                 log_obj.delivery_status = "Failed"
             
@@ -238,9 +274,12 @@ async def run_broadcast_campaign(db_session_factory, whatsapp_client: WhatsAppCl
             # Commit after each message to update the database states in real-time
             await db.commit()
             
+            # Add a small spacing delay of 50ms to protect Meta API rate control limits
+            await asyncio.sleep(0.05)
+            
     logger.info("Background campaign broadcast completed.")
 
-async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppClient, record_ids: List[int], base_url: Optional[str] = None, template_name: Optional[str] = None):
+async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppClient, record_ids: List[int], base_url: Optional[str] = None, template_name: Optional[str] = None, recipient_type: str = "parent"):
     logger.info(f"Starting background bulk send campaign for {len(record_ids)} records...")
     async with db_session_factory() as db:
         # Fetch the active template text
@@ -279,14 +318,23 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
         result = await db.execute(stmt)
         records = result.scalars().all()
         
-        for record in records:
-            # Check CampaignLog status
+        # Optimize N+1 queries by bulk fetching existing logs in a single query
+        existing_logs = {}
+        if record_ids:
             log_stmt = select(CampaignLog).where(
-                CampaignLog.record_id == record.id,
-                CampaignLog.template_name == template_name
+                and_(
+                    CampaignLog.record_id.in_(record_ids),
+                    CampaignLog.template_name == template_name
+                )
             )
             log_res = await db.execute(log_stmt)
-            log_obj = log_res.scalars().first()
+            for l_obj in log_res.scalars().all():
+                existing_logs[l_obj.record_id] = l_obj
+
+        import asyncio
+        for record in records:
+            # Check CampaignLog status
+            log_obj = existing_logs.get(record.id)
             
             # Skip if confirmed Interested
             if log_obj and log_obj.parent_response == "Interested":
@@ -297,11 +345,14 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 log_obj = CampaignLog(
                     record_id=record.id,
                     template_name=template_name,
+                    recipient_type=recipient_type,
                     campaign_status="Pending",
                     delivery_status="Unsent",
                     parent_response="No Response"
                 )
                 db.add(log_obj)
+            else:
+                log_obj.recipient_type = recipient_type
 
             try:
                 # Merge spreadsheet custom fields with default fallback mapping
@@ -320,8 +371,14 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                 # Compile template variables dynamically
                 msg_body = resolve_template_text(template_text, record, merged_vars)
 
+                # Route to student or parent number based on recipient_type
+                target_phone = record.parent_phone_number if recipient_type == "parent" else record.phone_number
+                # Fallback to student phone if parent phone is None
+                if recipient_type == "parent" and not target_phone:
+                    target_phone = record.phone_number
+
                 response = await whatsapp_client.send_message(
-                    to_phone=record.phone_number,
+                    to_phone=target_phone,
                     message_body=msg_body,
                     media_type=media_type,
                     media_url=media_url,
@@ -343,17 +400,18 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
                     # Log message in chat history
                     chat_msg = ChatMessage(
                         record_id=record.id,
-                        sender="system",
+                        sender="outreach",
                         message_text=msg_body or f"Template Outreach: {template_name}",
                         media_url=media_url if media_type != "none" else None,
-                        message_id=response.get("message_id")
+                        message_id=response.get("message_id"),
+                        recipient_type=recipient_type
                     )
                     db.add(chat_msg)
                 else:
                     log_obj.campaign_status = "Failed"
                     log_obj.delivery_status = "Failed"
             except Exception as e:
-                logger.error(f"Error bulk dispatching to {record.phone_number} (ID: {record.id}): {e}")
+                logger.error(f"Error bulk dispatching to {target_phone} (ID: {record.id}): {e}")
                 log_obj.campaign_status = "Failed"
                 log_obj.delivery_status = "Failed"
             
@@ -371,17 +429,18 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
             # Commit after each message to update database status in real-time
             await db.commit()
             
+            # Add a small spacing delay of 50ms to protect Meta API rate control limits
+            await asyncio.sleep(0.05)
+            
     logger.info("Background bulk send campaign completed.")
 
 # FastAPI lifespan for database setup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Setup table schemas in PostgreSQL
-    try:
-        await init_db()
-        logger.info("PostgreSQL schemas verified and initialized.")
-    except Exception as e:
-        logger.error(f"Failed to initialize PostgreSQL: {e}. Ensure DATABASE_URL is valid.")
+    logger.info("Initializing PostgreSQL database schemas...")
+    await init_db()
+    logger.info("PostgreSQL schemas verified and initialized successfully.")
     yield
 
 app = FastAPI(
@@ -401,10 +460,26 @@ async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
         content={"detail": "Internal Server Error"}
     )
 
-# Enable CORS for external/local testing
+# Enable CORS with restricted origin access
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS")
+if allowed_origins_str:
+    origins = [o.strip() for o in allowed_origins_str.split(",") if o.strip()]
+else:
+    # Safe defaults allowing standard local developer/mapped configurations
+    origins = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://localhost:8001",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8000",
+        "http://127.0.0.1:8001",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -431,7 +506,47 @@ from datetime import timedelta
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # JWT Configuration constants
-JWT_SECRET = os.getenv("JWT_SECRET", "supersecretkeychangeinproduction_9f83ea01")
+# JWT Configuration constants
+JWT_SECRET = os.getenv("JWT_SECRET")
+client_type = os.getenv("WHATSAPP_CLIENT_TYPE", "mock").lower()
+is_meta_mode = client_type in ["meta", "meta_cloud"]
+
+if not JWT_SECRET or JWT_SECRET == "change_me_to_a_random_secret_in_production":
+    import sys
+    is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "true"
+    is_docker = os.path.exists("/.dockerenv")
+    if not is_testing and is_docker and is_meta_mode:
+        raise ValueError(
+            "CRITICAL: JWT_SECRET environment variable is missing or set to the default placeholder! "
+            "For security in production (Meta mode), you must generate a secure random key and configure JWT_SECRET in your .env file."
+        )
+    # Default fallback for development/mock testing only
+    JWT_SECRET = "supersecretkeychangeinproduction_9f83ea01"
+
+# Enforce strict configuration settings in production Meta mode (when running inside Docker)
+import sys
+is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "true"
+is_docker = os.path.exists("/.dockerenv")
+if is_meta_mode and is_docker and not is_testing:
+    # 1. Verify META_APP_SECRET is present
+    if not os.getenv("META_APP_SECRET"):
+        raise ValueError(
+            "CRITICAL: META_APP_SECRET environment variable is missing in production Meta mode! "
+            "Meta webhook signature protection is disabled without a valid app secret."
+        )
+    # 2. Verify WHATSAPP_WEBHOOK_VERIFY_TOKEN is present and not set to default placeholder
+    verify_token = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
+    if not verify_token or verify_token == "mytestingtoken":
+        raise ValueError(
+            "CRITICAL: WHATSAPP_WEBHOOK_VERIFY_TOKEN environment variable is missing or set to default placeholder ('mytestingtoken') in production Meta mode!"
+        )
+    # 3. Verify PUBLIC_APP_URL is present and not set to default placeholder
+    public_url = os.getenv("PUBLIC_APP_URL")
+    if not public_url or public_url == "https://whatsapp.college.edu":
+        raise ValueError(
+            "CRITICAL: PUBLIC_APP_URL environment variable is missing or set to the default placeholder ('https://whatsapp.college.edu') in production Meta mode!"
+        )
+
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 600
 
@@ -491,24 +606,44 @@ async def get_current_user(
         )
     return user
 
+class CreateUserPayload(BaseModel):
+    full_name: str = Field(..., description="Staff member full name")
+    email: EmailStr = Field(..., description="Staff member work email")
+    username: str = Field(..., description="Unique login username")
+    password: str = Field(..., min_length=4, description="Login password")
+    role: Optional[str] = Field("counselor", description="'super_admin' or 'counselor'")
+
+@app.get("/api/v1/auth/me")
+async def get_current_user_profile(
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves profile info for currently logged in staff/admin user."""
+    return current_user.to_dict()
+
 @app.post("/api/v1/auth/login")
 async def login(payload: LoginPayload, db: AsyncSession = Depends(get_db)):
-    """Verifies administrator credentials and issues a JWT token."""
-    logger.info(f"Login attempt for user: {payload.username}")
+    """Verifies user credentials (by email or username) and issues a JWT token."""
+    login_id = payload.username.strip().lower()
+    logger.info(f"Login attempt for user/email: {login_id}")
     
-    # Fetch admin user
-    stmt = select(AdminUser).where(AdminUser.username == payload.username)
+    # Fetch user by username OR email
+    stmt = select(AdminUser).where(
+        (func.lower(AdminUser.username) == login_id) | (func.lower(AdminUser.email) == login_id)
+    )
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(status_code=401, detail="Invalid email/username or password")
+        
+    if user.is_active is False:
+        raise HTTPException(status_code=401, detail="Your account has been deactivated. Please contact your Super Admin.")
         
     # Verify password using bcrypt
     pwd_bytes = payload.password.encode("utf-8")
     hashed_bytes = user.hashed_password.encode("utf-8")
     if not bcrypt.checkpw(pwd_bytes, hashed_bytes):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(status_code=401, detail="Invalid email/username or password")
         
     # Issue JWT
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -519,8 +654,132 @@ async def login(payload: LoginPayload, db: AsyncSession = Depends(get_db)):
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "username": user.username
+        "username": user.username,
+        "user": user.to_dict()
     }
+
+class ChangePasswordPayload(BaseModel):
+    old_password: str = Field(..., description="Current password")
+    new_password: str = Field(..., description="New password")
+
+@app.post("/api/v1/admin/change-password")
+async def change_admin_password(
+    payload: ChangePasswordPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Updates the password for the currently authenticated user."""
+    logger.info(f"Password update requested for user: {current_user.username}")
+    
+    pwd_bytes = payload.old_password.encode("utf-8")
+    hashed_bytes = current_user.hashed_password.encode("utf-8")
+    if not bcrypt.checkpw(pwd_bytes, hashed_bytes):
+        raise HTTPException(status_code=400, detail="Invalid current password.")
+        
+    new_hashed = bcrypt.hashpw(payload.new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    current_user.hashed_password = new_hashed
+    await db.commit()
+    
+    return {"status": "success", "message": "Password updated successfully."}
+
+# ==========================================
+# STAFF & TEAM USER MANAGEMENT ENDPOINTS
+# ==========================================
+
+@app.get("/api/v1/users")
+async def get_team_users(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves list of all team members and counselors (Super Admin only)."""
+    if (current_user.role or "super_admin") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super Admin privileges required.")
+    stmt = select(AdminUser).order_by(AdminUser.id.asc())
+    res = await db.execute(stmt)
+    users = res.scalars().all()
+    return [u.to_dict() for u in users]
+
+@app.post("/api/v1/users")
+async def create_team_user(
+    payload: CreateUserPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Creates a new staff/counselor account (Super Admin only)."""
+    if (current_user.role or "super_admin") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only Super Admins can add team members.")
+
+    email_clean = payload.email.strip().lower()
+    username_clean = payload.username.strip().lower()
+
+    # Check for existing email or username
+    stmt = select(AdminUser).where(
+        (func.lower(AdminUser.email) == email_clean) | (func.lower(AdminUser.username) == username_clean)
+    )
+    res = await db.execute(stmt)
+    existing = res.scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=400, detail="A user with this email or username already exists.")
+
+    hashed = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    new_user = AdminUser(
+        full_name=payload.full_name.strip(),
+        email=email_clean,
+        username=username_clean,
+        hashed_password=hashed,
+        role=payload.role if payload.role in ["super_admin", "counselor"] else "counselor",
+        is_active=True
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return {"status": "success", "user": new_user.to_dict()}
+
+@app.patch("/api/v1/users/{user_id}/status")
+async def toggle_user_status(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Toggles active/inactive status of a staff member (Super Admin only)."""
+    if (current_user.role or "super_admin") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only Super Admins can alter user status.")
+
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own logged-in account.")
+
+    stmt = select(AdminUser).where(AdminUser.id == user_id)
+    res = await db.execute(stmt)
+    target_user = res.scalar_one_or_none()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User account not found.")
+
+    target_user.is_active = not target_user.is_active
+    await db.commit()
+    await db.refresh(target_user)
+    return {"status": "success", "user": target_user.to_dict()}
+
+@app.delete("/api/v1/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Deletes a staff member account (Super Admin only)."""
+    if (current_user.role or "super_admin") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only Super Admins can delete user accounts.")
+
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own logged-in account.")
+
+    stmt = select(AdminUser).where(AdminUser.id == user_id)
+    res = await db.execute(stmt)
+    target_user = res.scalar_one_or_none()
+    if target_user:
+        await db.delete(target_user)
+        await db.commit()
+
+    return {"status": "success", "message": f"User ID {user_id} deleted."}
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard(request: Request):
@@ -539,6 +798,38 @@ async def serve_dashboard(request: Request):
         "<p>Or run the React Vite development server: <code>cd frontend && npm run dev</code></p>"
     )
 
+async def parse_spreadsheet_safely(file: UploadFile, max_size: int = 10 * 1024 * 1024) -> pd.DataFrame:
+    """Streams the uploaded spreadsheet to a temporary file on disk and parses it using pandas."""
+    import tempfile
+    # Create temporary file
+    fd, temp_path = tempfile.mkstemp(suffix=f"_{file.filename.split('.')[-1]}")
+    try:
+        size = 0
+        with os.fdopen(fd, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_size:
+                    raise HTTPException(status_code=400, detail=f"Spreadsheet file size exceeds maximum limit of {max_size // (1024*1024)}MB.")
+                f.write(chunk)
+                
+        # Parse based on file type
+        if file.filename.endswith(".csv"):
+            df = pd.read_csv(temp_path)
+        else:
+            df = pd.read_excel(temp_path)
+        return df
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error parsing spreadsheet: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse spreadsheet file: {str(e)}")
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception as e:
+                logger.error(f"Failed to remove temporary spreadsheet file '{temp_path}': {e}")
+
 # Excel Ingestion and Parsing Engine
 @app.post("/api/v1/upload")
 async def upload_records(
@@ -555,13 +846,10 @@ async def upload_records(
         )
         
     try:
-        contents = await file.read()
-        logger.info(f"upload_records: file read complete, size={len(contents)} bytes")
-        if file.filename.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(contents))
-        else:
-            df = pd.read_excel(io.BytesIO(contents))
+        df = await parse_spreadsheet_safely(file)
         logger.info(f"upload_records: df parsing complete, shape={df.shape}")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to read file: {e}")
         raise HTTPException(status_code=400, detail=f"File parse error: {str(e)}")
@@ -573,16 +861,19 @@ async def upload_records(
     parent_col = None
     branch_col = None
     phone_col = None
+    parent_phone_col = None
     
     for i, col in enumerate(columns):
         if col in ["student name", "student_name", "student", "candidate name", "candidate"]:
             student_col = df.columns[i]
         elif col in ["parent name", "parent_name", "father name", "mother name", "parent", "guardian name"]:
             parent_col = df.columns[i]
-        elif col in ["selected branch", "selected_branch", "branch", "course", "selected course"]:
+        elif col in ["selected branch", "selected_branch", "branch", "course", "selected course", "dept", "department"]:
             branch_col = df.columns[i]
-        elif col in ["phone number", "phone_number", "phone", "mobile", "mobile number", "contact", "phone_no"]:
+        elif col in ["phone number", "phone_number", "phone", "mobile", "mobile number", "contact", "phone_no", "student phone", "student_phone", "student_mobile", "student_contact"]:
             phone_col = df.columns[i]
+        elif col in ["parent phone", "parent_phone", "parent_mobile", "parent_contact", "father_phone", "mother_phone", "parent_number", "parent_no", "parent phone number", "father phone number"]:
+            parent_phone_col = df.columns[i]
 
     if not phone_col:
         logger.warning("upload_records: Phone Number column is missing")
@@ -609,6 +900,17 @@ async def upload_records(
             # Skip invalid phone numbers
             continue
             
+        # Extract parent phone if present
+        parent_phone = None
+        if parent_phone_col and not pd.isna(row[parent_phone_col]):
+            raw_parent_phone = str(row[parent_phone_col]).strip()
+            if raw_parent_phone and raw_parent_phone.lower() != "nan":
+                cleaned_parent = "".join(filter(str.isdigit, raw_parent_phone))
+                if len(cleaned_parent) == 10:
+                    parent_phone = "91" + cleaned_parent
+                elif len(cleaned_parent) >= 10:
+                    parent_phone = cleaned_parent
+
         student_name = str(row[student_col]).strip() if student_col and not pd.isna(row[student_col]) else "N/A"
         parent_name = str(row[parent_col]).strip() if parent_col and not pd.isna(row[parent_col]) else "N/A"
         branch = str(row[branch_col]).strip() if branch_col and not pd.isna(row[branch_col]) else "N/A"
@@ -632,10 +934,12 @@ async def upload_records(
                 elif norm_col in ["parentname", "parent", "fathername", "mothername", "guardianname", "guardian"]:
                     row_variables["parent_name"] = cleaned_val
                     row_variables["parent"] = cleaned_val
-                elif norm_col in ["selectedbranch", "branch", "course", "selectedcourse", "status", "admissionstatus"]:
+                elif norm_col in ["selectedbranch", "branch", "course", "selectedcourse", "status", "admissionstatus", "dept", "department"]:
                     row_variables["selected_branch"] = cleaned_val
                     row_variables["branch"] = cleaned_val
                     row_variables["status"] = cleaned_val
+                    row_variables["dept"] = cleaned_val
+                    row_variables["department"] = cleaned_val
         
         phone_numbers.append(cleaned_phone)
         records_to_process.append({
@@ -643,6 +947,7 @@ async def upload_records(
             "parent_name": parent_name,
             "selected_branch": branch,
             "phone_number": cleaned_phone,
+            "parent_phone_number": parent_phone,
             "variables": row_variables
         })
 
@@ -664,30 +969,8 @@ async def upload_records(
     for record_data in records_to_process:
         phone = record_data["phone_number"]
         if phone in existing_records:
-            # Overwrite existing record details
-            rec = existing_records[phone]
-            rec.student_name = record_data["student_name"]
-            rec.parent_name = record_data["parent_name"]
-            rec.selected_branch = record_data["selected_branch"]
-            rec.variables = record_data["variables"]
-            
-            # Reset campaign statuses ONLY if the record has never been processed/sent
-            is_new_campaign = (
-                rec.delivery_status == "Unsent" or 
-                rec.campaign_status == "Pending" or 
-                (rec.delivery_status is None and rec.parent_response == "No Response")
-            )
-            if is_new_campaign:
-                rec.campaign_status = "Pending"
-                rec.delivery_status = "Unsent"
-                rec.parent_response = "No Response"
-                rec.message_id = None
-                rec.sent_at = None
-                rec.delivered_at = None
-                rec.read_at = None
-                rec.responded_at = None
-                record_ids_to_reset.append(rec.id)
-            updated_count += 1
+            # Ignore/skip duplicate phone numbers on Excel upload
+            continue
         else:
             # Create a brand new record
             rec = Record(
@@ -695,6 +978,7 @@ async def upload_records(
                 parent_name=record_data["parent_name"],
                 selected_branch=record_data["selected_branch"],
                 phone_number=phone,
+                parent_phone_number=record_data.get("parent_phone_number"),
                 variables=record_data["variables"],
                 campaign_status="Pending",
                 delivery_status="Unsent",
@@ -1180,6 +1464,21 @@ async def add_template_by_name(
         "message": f"Successfully fetched and set '{tmpl.template_name}' as active template."
     }
 
+def verify_file_signature(header: bytes, ext: str) -> bool:
+    """Verifies that the file binary header matches the declared extension."""
+    if ext in ["jpg", "jpeg"]:
+        return header.startswith(b'\xff\xd8\xff')
+    elif ext == "png":
+        return header.startswith(b'\x89PNG\r\n\x1a\n')
+    elif ext == "gif":
+        return header.startswith(b'GIF87a') or header.startswith(b'GIF89a')
+    elif ext == "pdf":
+        return header.startswith(b'%PDF-')
+    elif ext in ["docx", "xlsx"]:
+        # ZIP archive format signature (DOCX/XLSX are OpenXML ZIP packages)
+        return header.startswith(b'PK\x03\x04')
+    return False
+
 @app.post("/api/v1/template/upload-media")
 async def upload_template_media(
     file: UploadFile = File(...),
@@ -1203,14 +1502,35 @@ async def upload_template_media(
     file_path = os.path.join(media_dir, safe_filename)
     
     try:
-        contents = await file.read()
+        max_size = 5 * 1024 * 1024  # 5MB size limit
+        size = 0
+        header_read = False
+        
         with open(file_path, "wb") as f:
-            f.write(contents)
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_size:
+                    f.close()
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    raise HTTPException(status_code=400, detail="File size exceeds maximum limit of 5MB.")
+                
+                if not header_read:
+                    if not verify_file_signature(chunk, ext):
+                        f.close()
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        raise HTTPException(status_code=400, detail="File content does not match the file extension.")
+                    header_read = True
+                f.write(chunk)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to write template media file: {e}")
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
         
-        # Return URLs
     return {
         "status": "success",
         "filename": file.filename,
@@ -1240,11 +1560,33 @@ async def upload_general_media(
     file_path = os.path.join(media_dir, safe_filename)
     
     try:
-        contents = await file.read()
+        max_size = 5 * 1024 * 1024  # 5MB size limit
+        size = 0
+        header_read = False
+        
         with open(file_path, "wb") as f:
-            f.write(contents)
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_size:
+                    f.close()
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    raise HTTPException(status_code=400, detail="File size exceeds maximum limit of 5MB.")
+                
+                if not header_read:
+                    if not verify_file_signature(chunk, ext):
+                        f.close()
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        raise HTTPException(status_code=400, detail="File content does not match the file extension.")
+                    header_read = True
+                f.write(chunk)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to write media file: {e}")
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
         
     base_url = get_request_base_url(request).rstrip("/")
@@ -1257,6 +1599,9 @@ async def upload_general_media(
     }
 
 def get_request_base_url(request: Request) -> str:
+    public_url = os.getenv("PUBLIC_APP_URL")
+    if public_url:
+        return public_url.rstrip("/")
     proto = request.headers.get("x-forwarded-proto", request.url.scheme)
     host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
     return f"{proto}://{host}"
@@ -1264,6 +1609,7 @@ def get_request_base_url(request: Request) -> str:
 # Bulk Trigger Broadcast
 @app.post("/api/v1/campaign/broadcast")
 async def broadcast_campaign(
+    payload: BroadcastCampaignPayload,
     request: Request,
     background_tasks: BackgroundTasks, 
     db: AsyncSession = Depends(get_db),
@@ -1301,7 +1647,7 @@ async def broadcast_campaign(
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
     base_url = get_request_base_url(request)
-    background_tasks.add_task(run_broadcast_campaign, AsyncSessionLocal, client, base_url)
+    background_tasks.add_task(run_broadcast_campaign, AsyncSessionLocal, client, base_url, payload.recipient_type)
     
     return {
         "status": "success",
@@ -1357,7 +1703,7 @@ async def send_bulk_campaign(
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
     base_url = get_request_base_url(request)
-    background_tasks.add_task(run_bulk_send_campaign, AsyncSessionLocal, client, payload.record_ids, base_url, template_name)
+    background_tasks.add_task(run_bulk_send_campaign, AsyncSessionLocal, client, payload.record_ids, base_url, template_name, payload.recipient_type)
     
     return {
         "status": "success",
@@ -1371,6 +1717,7 @@ async def send_single_message(
     id: int, 
     request: Request,
     template_name: Optional[str] = None,
+    recipient_type: str = Query("parent"),
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
@@ -1430,6 +1777,12 @@ async def send_single_message(
     # Compile message text
     msg_body = resolve_template_text(template_text, record, merged_vars)
 
+    # Route to student or parent number based on recipient_type
+    target_phone = record.parent_phone_number if recipient_type == "parent" else record.phone_number
+    # Fallback to student phone if parent phone is None
+    if recipient_type == "parent" and not target_phone:
+        target_phone = record.phone_number
+
     # Find or create CampaignLog for single dispatch
     log_stmt = select(CampaignLog).where(
         CampaignLog.record_id == record.id,
@@ -1441,17 +1794,20 @@ async def send_single_message(
         log_obj = CampaignLog(
             record_id=record.id,
             template_name=template_name,
+            recipient_type=recipient_type,
             campaign_status="Pending",
             delivery_status="Unsent",
             parent_response="No Response"
         )
         db.add(log_obj)
+    else:
+        log_obj.recipient_type = recipient_type
 
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
     try:
         response = await client.send_message(
-            to_phone=record.phone_number,
+            to_phone=target_phone,
             message_body=msg_body,
             media_type=media_type,
             media_url=media_url,
@@ -1473,10 +1829,11 @@ async def send_single_message(
             # Log message in chat history
             chat_msg = ChatMessage(
                 record_id=record.id,
-                sender="system",
+                sender="outreach",
                 message_text=msg_body or f"Template Outreach: {template_name}",
                 media_url=media_url if media_type != "none" else None,
-                message_id=response.get("message_id")
+                message_id=response.get("message_id"),
+                recipient_type=recipient_type
             )
             db.add(chat_msg)
             
@@ -1530,100 +1887,112 @@ async def process_webhook_event(
     button_text: Optional[str] = None, 
     db: AsyncSession = None
 ):
+    # 1. Try to find in CampaignLog
     stmt = select(CampaignLog).where(CampaignLog.message_id == message_id)
     result = await db.execute(stmt)
     log = result.scalars().first()
     
-    if not log:
+    # 2. Try to find in ChatMessage
+    chat_stmt = select(ChatMessage).where(ChatMessage.message_id == message_id)
+    chat_res = await db.execute(chat_stmt)
+    chat_message = chat_res.scalars().first()
+    
+    if not log and not chat_message:
         logger.warning(f"Webhook event ignored: message_id '{message_id}' not found in database.")
         return {"status": "ignored", "reason": "unknown_message_id"}
         
     if event == "status_update":
         status_val = status.lower() if status else ""
         if status_val in ["sent", "delivered", "read", "failed"]:
-            if status_val == "read":
-                display_status = "Read"
-            elif status_val == "failed":
-                display_status = "Failed"
-            else:
-                display_status = status_val.capitalize()
+            if chat_message:
+                chat_message.delivery_status = status_val
                 
-            log.delivery_status = display_status
-            
-            if status_val == "sent":
-                log.campaign_status = "Sent"
-            elif status_val == "delivered":
-                if not log.delivered_at:
-                    log.delivered_at = datetime.utcnow()
-                log.campaign_status = "Sent"
-            elif status_val == "read":
-                if not log.delivered_at:
-                    log.delivered_at = datetime.utcnow()
-                log.read_at = datetime.utcnow()
-                log.campaign_status = "Sent"
-            elif status_val == "failed":
-                log.campaign_status = "Failed"
-                log.parent_response = "No Response"
-                log.delivered_at = None
-                log.read_at = None
-                log.responded_at = None
+            if log:
+                if status_val == "read":
+                    display_status = "Read"
+                elif status_val == "failed":
+                    display_status = "Failed"
+                else:
+                    display_status = status_val.capitalize()
+                    
+                log.delivery_status = display_status
                 
+                if status_val == "sent":
+                    log.campaign_status = "Sent"
+                elif status_val == "delivered":
+                    if not log.delivered_at:
+                        log.delivered_at = datetime.utcnow()
+                    log.campaign_status = "Sent"
+                elif status_val == "read":
+                    if not log.delivered_at:
+                        log.delivered_at = datetime.utcnow()
+                    log.read_at = datetime.utcnow()
+                    log.campaign_status = "Sent"
+                elif status_val == "failed":
+                    log.campaign_status = "Failed"
+                    log.parent_response = "No Response"
+                    log.delivered_at = None
+                    log.read_at = None
+                    log.responded_at = None
+                    
     elif event == "quick_reply":
-        if button_text in ["Interested", "Not Interested"]:
-            log.parent_response = button_text
-            log.responded_at = datetime.utcnow()
-            
-            log.delivery_status = "Read"
-            log.campaign_status = "Sent"
-            if not log.delivered_at:
-                log.delivered_at = datetime.utcnow()
-            if not log.read_at:
-                log.read_at = datetime.utcnow()
+        if log:
+            if button_text in ["Interested", "Not Interested"]:
+                log.parent_response = button_text
+                log.responded_at = datetime.utcnow()
                 
-            # Log quick reply in chat history
-            chat_msg = ChatMessage(
-                record_id=log.record_id,
-                sender="parent",
-                message_text=button_text,
-                message_id=f"qr_{message_id}"
-            )
-            db.add(chat_msg)
+                log.delivery_status = "Read"
+                log.campaign_status = "Sent"
+                if not log.delivered_at:
+                    log.delivered_at = datetime.utcnow()
+                if not log.read_at:
+                    log.read_at = datetime.utcnow()
+                    
+                # Log quick reply in chat history
+                chat_msg = ChatMessage(
+                    record_id=log.record_id,
+                    sender="parent",
+                    message_text=button_text,
+                    message_id=f"qr_{message_id}"
+                )
+                db.add(chat_msg)
             
     # Mirror updates to the legacy Record table so direct database checks are synced
-    rec_stmt = select(Record).where(Record.id == log.record_id)
-    rec_res = await db.execute(rec_stmt)
-    rec = rec_res.scalars().first()
-    if rec:
-        old_parent_response = rec.parent_response
-        rec.campaign_status = log.campaign_status
-        rec.delivery_status = log.delivery_status
-        rec.parent_response = log.parent_response
-        rec.message_id = log.message_id
-        rec.sent_template = log.template_name
-        rec.sent_at = log.sent_at
-        rec.delivered_at = log.delivered_at
-        rec.read_at = log.read_at
-        rec.responded_at = log.responded_at
-        
-        # Auto-tag based on parent response transitions
-        if rec.parent_response == "Not Interested":
-            rec.pipeline_tag = "Not Interested"
-        elif rec.parent_response == "Interested" and old_parent_response == "Not Interested":
-            rec.pipeline_tag = None
+    if log:
+        rec_stmt = select(Record).where(Record.id == log.record_id)
+        rec_res = await db.execute(rec_stmt)
+        rec = rec_res.scalars().first()
+        if rec:
+            old_parent_response = rec.parent_response
+            rec.campaign_status = log.campaign_status
+            rec.delivery_status = log.delivery_status
+            rec.parent_response = log.parent_response
+            rec.message_id = log.message_id
+            rec.sent_template = log.template_name
+            rec.sent_at = log.sent_at
+            rec.delivered_at = log.delivered_at
+            rec.read_at = log.read_at
+            rec.responded_at = log.responded_at
             
-        detect_and_save_call_request(rec, button_text)
+            # Auto-tag based on parent response transitions
+            if rec.parent_response == "Not Interested":
+                rec.pipeline_tag = "Not Interested"
+            elif rec.parent_response == "Interested" and old_parent_response == "Not Interested":
+                rec.pipeline_tag = None
+                
+            detect_and_save_call_request(rec, button_text)
             
     await db.commit()
-    logger.info(f"Updated CampaignLog ID {log.id} status via webhook callback processing.")
+    logger.info("Updated ChatMessage/CampaignLog status via webhook callback processing.")
     
     # Trigger auto-response for quick replies (Interested, Not Interested)
-    if event == "quick_reply" and button_text in ["Interested", "Not Interested"]:
+    if log and event == "quick_reply" and button_text in ["Interested", "Not Interested"]:
         try:
             await handle_quick_reply_auto_response(log.record_id, button_text, db)
         except Exception as e:
             logger.error(f"Error triggering quick reply auto response: {e}")
             
-    return {"status": "success", "record_id": log.record_id}
+    return {"status": "success", "record_id": log.record_id if log else chat_message.record_id}
 
 # Helper to process incoming quick reply button clicks (e.g. Interested, Not Interested) and trigger auto-response
 async def handle_quick_reply_auto_response(
@@ -1878,15 +2247,52 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
             matched_rule = rule
             break
             
-    if not matched_rule:
-        matched_rule = next((r for r in all_rules if r.keyword == "default"), None)
-        
     if matched_rule:
         return {
             "reply_text": matched_rule.reply_text,
             "buttons": [],
             "media_url": None,
             "source_keyword": matched_rule.keyword
+        }
+
+    # 5. Check AI Knowledge Base (Brochures & Crawled Website Pages)
+    try:
+        brochure_stmt = select(BrochureDocument).where(BrochureDocument.is_active == True)
+        brochure_res = await db.execute(brochure_stmt)
+        active_brochures = brochure_res.scalars().all()
+
+        web_stmt = select(WebsiteKnowledge).where(WebsiteKnowledge.is_active == True)
+        web_res = await db.execute(web_stmt)
+        active_web_pages = web_res.scalars().all()
+
+        if active_brochures or active_web_pages:
+            from brochure_service import query_brochures
+            brochure_reply = await query_brochures(
+                query_text=message_text,
+                active_brochures=active_brochures,
+                website_pages=active_web_pages,
+                student_name=record.student_name if record else "Student",
+                parent_name=record.parent_name if record else "Parent",
+                selected_branch=record.selected_branch if record else "Program"
+            )
+            if brochure_reply:
+                return {
+                    "reply_text": brochure_reply["reply_text"],
+                    "buttons": brochure_reply.get("buttons", []),
+                    "media_url": None,
+                    "source_keyword": "ai_knowledge_base"
+                }
+    except Exception as e:
+        logger.error(f"Error querying AI Knowledge Engine: {e}")
+
+    # 6. Default Fallback Rule
+    default_rule = next((r for r in all_rules if r.keyword == "default"), None)
+    if default_rule:
+        return {
+            "reply_text": default_rule.reply_text,
+            "buttons": [],
+            "media_url": None,
+            "source_keyword": default_rule.keyword
         }
         
     return None
@@ -1985,13 +2391,25 @@ async def handle_incoming_text_reply(
     import re
     # 1. Normalize phone number (strip '+', check suffix match)
     clean_from = from_phone.strip().replace("+", "")
+    suffix = clean_from[-10:]
     
     # Check suffix match (last 10 digits) to handle international prefix variations
-    stmt = select(Record).where(Record.phone_number.like(f"%{clean_from[-10:]}"))
+    stmt = select(Record).where(
+        or_(
+            Record.phone_number.like(f"%{suffix}"),
+            Record.parent_phone_number.like(f"%{suffix}")
+        )
+    )
     result = await db.execute(stmt)
     record = result.scalars().first()
     
-    if not record:
+    sender = "student"
+    if record:
+        if record.parent_phone_number and suffix in record.parent_phone_number:
+            sender = "parent"
+        else:
+            sender = "student"
+    else:
         # Create a new Record for Direct Inquiry
         record = Record(
             student_name=f"Inquirer ({from_phone})",
@@ -2008,12 +2426,18 @@ async def handle_incoming_text_reply(
     # 2. Save incoming message in ChatMessage
     chat_msg = ChatMessage(
         record_id=record.id,
-        sender="parent",
+        sender=sender,
         message_text=message_text or "",
-        message_id=message_id
+        message_id=message_id,
+        recipient_type=sender
     )
     db.add(chat_msg)
     
+    # If candidate's past query was completed, reopen it to pending on new incoming message
+    if record.counselor_status == 'completed':
+        record.counselor_status = 'pending'
+        logger.info(f"Reopened record {record.id} from completed to pending due to new incoming message.")
+
     # Increment unread count ONLY for real typed messages, NOT button/interactive clicks
     if not is_button_click:
         current_vars = record.variables or {}
@@ -2204,8 +2628,33 @@ async def verify_whatsapp_webhook(request: Request):
 @app.post("/api/v1/whatsapp/webhook")
 async def whatsapp_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """Receives event updates (sent, delivered, read) and replies from Meta Cloud API or custom simulators."""
+    # Read raw body bytes
+    body_bytes = await request.body()
+    
+    # Verify signature if META_APP_SECRET is set
+    app_secret = os.getenv("META_APP_SECRET")
+    if app_secret:
+        signature_header = request.headers.get("X-Hub-Signature-256")
+        if not signature_header or not signature_header.startswith("sha256="):
+            logger.warning("Missing or invalid X-Hub-Signature-256 header on incoming webhook.")
+            raise HTTPException(status_code=401, detail="Missing or invalid signature.")
+            
+        expected_signature = signature_header.split("sha256=")[-1]
+        
+        import hmac, hashlib
+        computed_signature = hmac.new(
+            app_secret.encode("utf-8"),
+            body_bytes,
+            hashlib.sha256
+        ).hexdigest()
+        
+        if not hmac.compare_digest(computed_signature, expected_signature):
+            logger.warning("Signature validation failed for incoming Meta Webhook.")
+            raise HTTPException(status_code=401, detail="Signature verification failed.")
+            
     try:
-        body = await request.json()
+        import json
+        body = json.loads(body_bytes) if body_bytes else {}
     except Exception:
         body = {}
         
@@ -2475,12 +2924,14 @@ async def get_reminders(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Fetches all records that have a scheduled call reminder active."""
-    stmt = select(Record).where(
-        and_(
-            Record.variables.is_not(None),
-            Record.variables["scheduled_call"].is_not(None)
-        )
-    ).order_by(Record.id.desc())
+    conditions = [
+        Record.variables.is_not(None),
+        Record.variables["scheduled_call"].is_not(None)
+    ]
+    if current_user.role == 'counselor':
+        conditions.append(Record.assigned_counselor_id == current_user.id)
+
+    stmt = select(Record).where(and_(*conditions)).order_by(Record.id.desc())
     
     res = await db.execute(stmt)
     records = res.scalars().all()
@@ -2519,31 +2970,31 @@ async def get_records_list(
     branch: Optional[str] = None,
     template: Optional[str] = None,
     pipeline_tag: Optional[str] = None,
+    recipient_type: Optional[str] = None,
     has_unresolved_notes: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Retrieves paginated, filtered record entries for the dashboard data table."""
-    selected_template = template
-    if not selected_template or selected_template.lower() == "all":
-        tmpl_stmt = select(CampaignTemplate).where(CampaignTemplate.is_active == True).limit(1)
-        tmpl_res = await db.execute(tmpl_stmt)
-        template_obj = tmpl_res.scalars().first()
-        if not template_obj:
-            tmpl_stmt = select(CampaignTemplate).order_by(CampaignTemplate.id.asc()).limit(1)
-            tmpl_res = await db.execute(tmpl_stmt)
-            template_obj = tmpl_res.scalars().first()
-        selected_template = template_obj.template_name if template_obj else "admission_outreach"
-
-    # Subquery to find the latest CampaignLog.id for each record_id under the selected template
-    log_subq = select(
-        CampaignLog.record_id,
-        func.max(CampaignLog.id).label("max_id")
-    ).where(
-        CampaignLog.template_name == selected_template
-    ).group_by(
-        CampaignLog.record_id
-    ).subquery()
+    # Subquery to find the latest CampaignLog.id for each record_id
+    if not template or template.lower() == "all":
+        selected_template = "all"
+        log_subq = select(
+            CampaignLog.record_id,
+            func.max(CampaignLog.id).label("max_id")
+        ).group_by(
+            CampaignLog.record_id
+        ).subquery()
+    else:
+        selected_template = template
+        log_subq = select(
+            CampaignLog.record_id,
+            func.max(CampaignLog.id).label("max_id")
+        ).where(
+            CampaignLog.template_name == selected_template
+        ).group_by(
+            CampaignLog.record_id
+        ).subquery()
 
     # Core query: Outer join on the subquery, then join with CampaignLog on max_id to prevent duplicates
     stmt = select(Record, CampaignLog).outerjoin(
@@ -2562,7 +3013,8 @@ async def get_records_list(
                 Record.student_name.ilike(search_pattern),
                 Record.parent_name.ilike(search_pattern),
                 Record.selected_branch.ilike(search_pattern),
-                Record.phone_number.ilike(search_pattern)
+                Record.phone_number.ilike(search_pattern),
+                Record.parent_phone_number.ilike(search_pattern)
             )
         )
         
@@ -2571,7 +3023,7 @@ async def get_records_list(
         val = delivery_status.lower()
         if val == "unsent":
             stmt = stmt.where(or_(CampaignLog.delivery_status == None, CampaignLog.delivery_status.ilike("unsent")))
-        elif val == "undelivered":
+        elif val == "undelivered" or val == "pending":
             stmt = stmt.where(CampaignLog.campaign_status == "Sent", CampaignLog.delivery_status == "Sent")
         elif val == "delivered":
             stmt = stmt.where(CampaignLog.delivery_status.in_(["Delivered", "Read"]))
@@ -2640,6 +3092,12 @@ async def get_records_list(
             )
         )
 
+    if recipient_type and recipient_type.lower() != "all":
+        if recipient_type.lower() == "parent":
+            stmt = stmt.where(and_(Record.parent_phone_number != None, Record.parent_phone_number != ""))
+        elif recipient_type.lower() == "student":
+            stmt = stmt.where(or_(Record.parent_phone_number == None, Record.parent_phone_number == ""))
+
 
 
     # Count total matches
@@ -2686,7 +3144,7 @@ async def get_records_list(
             record_dict["delivery_status"] = "Unsent"
             record_dict["parent_response"] = "No Response"
             record_dict["message_id"] = None
-            record_dict["sent_template"] = selected_template
+            record_dict["sent_template"] = r.sent_template
             record_dict["sent_at"] = None
             record_dict["delivered_at"] = None
             record_dict["read_at"] = None
@@ -2749,6 +3207,40 @@ async def update_record_tag(
         "status": "success",
         "message": f"Pipeline tag updated to '{record.pipeline_tag}' for {record.student_name}.",
         "pipeline_tag": record.pipeline_tag
+    }
+
+@app.post("/api/v1/records/{id}/counselor-status")
+async def update_counselor_status(
+    id: int,
+    payload: UpdateCounselorStatusPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Updates the counselor status of a candidate record ('active' vs 'completed')."""
+    stmt = select(Record).where(Record.id == id)
+    res = await db.execute(stmt)
+    record = res.scalar_one_or_none()
+    
+    if not record:
+        raise HTTPException(status_code=404, detail="Candidate record not found.")
+        
+    record.counselor_status = payload.counselor_status
+    if payload.counselor_status == 'completed':
+        record.assigned_counselor_id = None
+        record.assigned_counselor_name = None
+        note = RecordNote(
+            record_id=id,
+            note_text=f"✅ Query marked as Completed (Resolved) by Counselor {current_user.full_name or current_user.username}. Lead unassigned and slot freed up for future queries.",
+            created_by=current_user.full_name or current_user.username,
+            resolved=True
+        )
+        db.add(note)
+    await db.commit()
+    
+    return {
+        "status": "success",
+        "message": f"Counselor status updated to '{record.counselor_status}' for {record.student_name}.",
+        "counselor_status": record.counselor_status
     }
 
 @app.get("/api/v1/records/{id}/notes")
@@ -2827,6 +3319,7 @@ async def export_records_to_excel(
     branch: Optional[str] = None,
     template: Optional[str] = None,
     pipeline_tag: Optional[str] = None,
+    recipient_type: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
@@ -2869,7 +3362,8 @@ async def export_records_to_excel(
                 Record.student_name.ilike(search_pattern),
                 Record.parent_name.ilike(search_pattern),
                 Record.selected_branch.ilike(search_pattern),
-                Record.phone_number.ilike(search_pattern)
+                Record.phone_number.ilike(search_pattern),
+                Record.parent_phone_number.ilike(search_pattern)
             )
         )
         
@@ -2877,7 +3371,7 @@ async def export_records_to_excel(
         val = delivery_status.lower()
         if val == "unsent":
             stmt = stmt.where(or_(CampaignLog.delivery_status == None, CampaignLog.delivery_status.ilike("unsent")))
-        elif val == "undelivered":
+        elif val == "undelivered" or val == "pending":
             stmt = stmt.where(CampaignLog.campaign_status == "Sent", CampaignLog.delivery_status == "Sent")
         elif val == "delivered":
             stmt = stmt.where(CampaignLog.delivery_status.in_(["Delivered", "Read"]))
@@ -2934,6 +3428,12 @@ async def export_records_to_excel(
             )
         else:
             stmt = stmt.where(Record.pipeline_tag.ilike(pipeline_tag))
+
+    if recipient_type and recipient_type.lower() != "all":
+        if recipient_type.lower() == "parent":
+            stmt = stmt.where(and_(Record.parent_phone_number != None, Record.parent_phone_number != ""))
+        elif recipient_type.lower() == "student":
+            stmt = stmt.where(or_(Record.parent_phone_number == None, Record.parent_phone_number == ""))
             
     # Retrieve all matched items without pagination limits
     stmt = stmt.order_by(Record.id.desc())
@@ -2950,7 +3450,8 @@ async def export_records_to_excel(
         data.append({
             "Student Name": r.student_name,
             "Parent Name": r.parent_name,
-            "Phone Number": r.phone_number,
+            "Student Phone Number": r.phone_number,
+            "Parent Phone Number": r.parent_phone_number or "N/A",
             "Selected Branch": r.selected_branch,
             "Delivery Status": d_status,
             "Parent Response": p_resp,
@@ -2979,6 +3480,7 @@ async def export_records_to_excel(
 
 @app.get("/api/v1/chat/recent")
 async def get_recent_chats(
+    chat_tab: Optional[str] = "active",
     db: AsyncSession = Depends(get_db),
     current_user: AdminUser = Depends(get_current_user)
 ):
@@ -2989,12 +3491,34 @@ async def get_recent_chats(
         func.max(ChatMessage.id).label("max_id")
     ).group_by(ChatMessage.record_id).subquery()
     
-    # Main query to join Record, ChatMessage and the max_id subquery
-    stmt = select(Record, ChatMessage).join(
-        ChatMessage, Record.id == ChatMessage.record_id
-    ).join(
-        subq, and_(ChatMessage.record_id == subq.c.record_id, ChatMessage.id == subq.c.max_id)
-    ).order_by(ChatMessage.id.desc())
+    # Main query to outerjoin Record, subquery and ChatMessage (displays all candidates in inbox sidebar)
+    stmt = select(Record, ChatMessage).outerjoin(
+        subq, Record.id == subq.c.record_id
+    ).outerjoin(
+        ChatMessage, ChatMessage.id == subq.c.max_id
+    )
+    
+    # Filter by counselor assignment if logged in as counselor
+    if current_user.role == 'counselor':
+        if chat_tab == 'resolved':
+            stmt = stmt.where(
+                and_(
+                    Record.assigned_counselor_id == current_user.id,
+                    Record.counselor_status == 'completed'
+                )
+            )
+        else:
+            stmt = stmt.where(
+                and_(
+                    Record.assigned_counselor_id == current_user.id,
+                    or_(
+                        Record.counselor_status == None,
+                        Record.counselor_status != 'completed'
+                    )
+                )
+            )
+        
+    stmt = stmt.order_by(ChatMessage.id.desc().nulls_last(), Record.id.desc())
     
     result = await db.execute(stmt)
     rows = result.all()
@@ -3019,7 +3543,7 @@ async def get_recent_chats(
         rec_dict["parent_response"] = map_response_for_display(rec_dict.get("parent_response"))
         recent_chats.append({
             "record": rec_dict,
-            "last_message": msg.to_dict()
+            "last_message": msg.to_dict() if msg else None
         })
     return recent_chats
 
@@ -3088,10 +3612,20 @@ async def send_manual_chat_message(
     if not record:
         raise HTTPException(status_code=404, detail="Candidate record not found.")
         
+    if payload.recipient_type == "parent":
+        if not record.parent_phone_number:
+            raise HTTPException(
+                status_code=400, 
+                detail="Parent phone number is not registered for this candidate. Please edit contact details to add a parent phone number."
+            )
+        target_phone = record.parent_phone_number
+    else:
+        target_phone = record.phone_number
+
     client_type = request.headers.get("x-whatsapp-client-type")
     whatsapp_client = get_whatsapp_client(client_type)
     response = await whatsapp_client.send_free_form_message(
-        to_phone=record.phone_number,
+        to_phone=target_phone,
         message_text=payload.message_text
     )
     
@@ -3103,7 +3637,8 @@ async def send_manual_chat_message(
         record_id=record.id,
         sender="counselor",
         message_text=payload.message_text,
-        message_id=response.get("message_id")
+        message_id=response.get("message_id"),
+        recipient_type=payload.recipient_type
     )
     db.add(chat_msg)
     
@@ -3166,8 +3701,19 @@ async def send_manual_chat_template(
     client_type = request.headers.get("x-whatsapp-client-type")
     client = get_whatsapp_client(client_type)
     
+    # Route to student or parent number based on recipient_type
+    if payload.recipient_type == "parent":
+        if not record.parent_phone_number:
+            raise HTTPException(
+                status_code=400, 
+                detail="Parent phone number is not registered for this candidate. Please edit contact details to add a parent phone number."
+            )
+        target_phone = record.parent_phone_number
+    else:
+        target_phone = record.phone_number
+
     response = await client.send_message(
-        to_phone=record.phone_number,
+        to_phone=target_phone,
         message_body=msg_body,
         media_type=template.media_type or "none",
         media_url=template.media_url,
@@ -3183,6 +3729,7 @@ async def send_manual_chat_template(
     log_obj = CampaignLog(
         record_id=record.id,
         template_name=template.template_name,
+        recipient_type=payload.recipient_type,
         message_id=response.get("message_id"),
         campaign_status="Sent",
         delivery_status="Sent",
@@ -3195,7 +3742,8 @@ async def send_manual_chat_template(
         record_id=record.id,
         sender="counselor",
         message_text=f"Template Sent: {template.template_name}\n\n{msg_body}",
-        message_id=response.get("message_id")
+        message_id=response.get("message_id"),
+        recipient_type=payload.recipient_type
     )
     db.add(chat_msg)
 
@@ -3346,11 +3894,211 @@ async def delete_bot_flow(
     await db.commit()
     return {"status": "success", "message": f"Flow ID {flow_id} deleted."}
 
+# ==========================================
+# AI BROCHURE & KNOWLEDGE BASE ENDPOINTS
+# ==========================================
+
+BROCHURES_DIR = os.path.join(PROJECT_ROOT, "backend", "uploads", "brochures")
+os.makedirs(BROCHURES_DIR, exist_ok=True)
+
+@app.get("/api/v1/brochures")
+async def get_brochure_documents(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves all uploaded brochure documents."""
+    stmt = select(BrochureDocument).order_by(BrochureDocument.uploaded_at.desc())
+    res = await db.execute(stmt)
+    docs = res.scalars().all()
+    return [d.to_dict() for d in docs]
+
+@app.post("/api/v1/brochures/upload")
+async def upload_brochure_document(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Uploads a PDF/TXT brochure, extracts text content, and indexes it for AI Query Engine."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename missing.")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".pdf", ".txt", ".md"]:
+        raise HTTPException(status_code=400, detail="Only PDF, TXT, or MD documents are supported.")
+
+    import uuid
+    saved_filename = f"{uuid.uuid4().hex}_{file.filename}"
+    saved_path = os.path.join(BROCHURES_DIR, saved_filename)
+
+    with open(saved_path, "wb") as buffer:
+        content = await file.read()
+        buffer.write(content)
+
+    from brochure_service import extract_text_from_file
+    extracted_text = extract_text_from_file(saved_path, file.filename)
+
+    if not extracted_text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract readable text from document. Please ensure the PDF is not password protected or an un-OCR image."
+        )
+
+    doc_title = title if title and title.strip() else os.path.splitext(file.filename)[0]
+
+    brochure = BrochureDocument(
+        title=doc_title,
+        filename=file.filename,
+        file_path=saved_path,
+        extracted_text=extracted_text,
+        is_active=True
+    )
+    db.add(brochure)
+    await db.commit()
+    await db.refresh(brochure)
+
+    return {"status": "success", "brochure": brochure.to_dict()}
+
+@app.patch("/api/v1/brochures/{brochure_id}/toggle")
+async def toggle_brochure_status(
+    brochure_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Toggles active/inactive status of a brochure document."""
+    stmt = select(BrochureDocument).where(BrochureDocument.id == brochure_id)
+    res = await db.execute(stmt)
+    doc = res.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Brochure document not found.")
+
+    doc.is_active = not doc.is_active
+    await db.commit()
+    await db.refresh(doc)
+    return {"status": "success", "brochure": doc.to_dict()}
+
+@app.delete("/api/v1/brochures/{brochure_id}")
+async def delete_brochure_document(
+    brochure_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Deletes a brochure document from database and filesystem."""
+    stmt = select(BrochureDocument).where(BrochureDocument.id == brochure_id)
+    res = await db.execute(stmt)
+    doc = res.scalar_one_or_none()
+    if doc:
+        if os.path.exists(doc.file_path):
+            try:
+                os.remove(doc.file_path)
+            except Exception as e:
+                logger.warning(f"Could not remove physical file {doc.file_path}: {e}")
+        await db.delete(doc)
+        await db.commit()
+
+    return {"status": "success", "message": f"Brochure ID {brochure_id} deleted."}
+
+# ==========================================
+# WEBSITE CRAWLER & INDEXER ENDPOINTS
+# ==========================================
+
+@app.get("/api/v1/website/pages")
+async def get_website_pages(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Retrieves all indexed website knowledge pages."""
+    stmt = select(WebsiteKnowledge).order_by(WebsiteKnowledge.crawled_at.desc())
+    res = await db.execute(stmt)
+    pages = res.scalars().all()
+    return [p.to_dict() for p in pages]
+
+@app.post("/api/v1/website/crawl")
+async def crawl_website_endpoint(
+    payload: CrawlWebsitePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Crawls an institutional website domain and indexes all internal pages into the AI Knowledge Base."""
+    from crawler_service import crawl_website
+    crawl_result = await crawl_website(root_url=payload.url, max_pages=payload.max_pages or 25)
+
+    crawled_pages = crawl_result.get("pages", [])
+    if not crawled_pages:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract readable page content from the provided website URL. Please check the domain link."
+        )
+
+    saved_records = []
+    for page in crawled_pages:
+        stmt = select(WebsiteKnowledge).where(WebsiteKnowledge.url == page["url"])
+        res = await db.execute(stmt)
+        existing_page = res.scalar_one_or_none()
+
+        if existing_page:
+            existing_page.title = page["title"]
+            existing_page.extracted_text = page["text"]
+            existing_page.domain = page["domain"]
+            existing_page.is_active = True
+            saved_records.append(existing_page)
+        else:
+            new_page = WebsiteKnowledge(
+                url=page["url"],
+                domain=page["domain"],
+                title=page["title"],
+                extracted_text=page["text"],
+                is_active=True
+            )
+            db.add(new_page)
+            saved_records.append(new_page)
+
+    await db.commit()
+    return {
+        "status": "success",
+        "domain": crawl_result.get("domain"),
+        "pages_crawled": len(saved_records)
+    }
+
+@app.patch("/api/v1/website/pages/{page_id}/toggle")
+async def toggle_website_page_status(
+    page_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Toggles active status of an indexed website knowledge page."""
+    stmt = select(WebsiteKnowledge).where(WebsiteKnowledge.id == page_id)
+    res = await db.execute(stmt)
+    page = res.scalar_one_or_none()
+    if not page:
+        raise HTTPException(status_code=404, detail="Indexed web page not found.")
+
+    page.is_active = not page.is_active
+    await db.commit()
+    await db.refresh(page)
+    return {"status": "success", "page": page.to_dict()}
+
+@app.delete("/api/v1/website/pages/{page_id}")
+async def delete_website_page(
+    page_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Deletes an indexed website page from AI Knowledge Base."""
+    stmt = select(WebsiteKnowledge).where(WebsiteKnowledge.id == page_id)
+    res = await db.execute(stmt)
+    page = res.scalar_one_or_none()
+    if page:
+        await db.delete(page)
+        await db.commit()
+
+    return {"status": "success", "message": f"Website page ID {page_id} deleted."}
+
 # Contacts Management APIs
 @app.get("/api/v1/contacts")
 async def get_contacts_list(
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=5000),
     search: Optional[str] = None,
     branch: Optional[str] = None,
     pipeline_tag: Optional[str] = None,
@@ -3367,6 +4115,7 @@ async def get_contacts_list(
             Record.student_name.ilike(search_pattern),
             Record.parent_name.ilike(search_pattern),
             Record.phone_number.ilike(search_pattern),
+            Record.parent_phone_number.ilike(search_pattern),
             Record.selected_branch.ilike(search_pattern)
         )
         stmt = stmt.where(filter_cond)
@@ -3380,6 +4129,15 @@ async def get_contacts_list(
         stmt = stmt.where(Record.pipeline_tag == pipeline_tag)
         count_stmt = count_stmt.where(Record.pipeline_tag == pipeline_tag)
         
+    # Counselors only see contacts assigned to them or unassigned
+    if (current_user.role or "super_admin") == "counselor":
+        counselor_filter = or_(
+            Record.assigned_counselor_id == current_user.id,
+            Record.assigned_counselor_id.is_(None)
+        )
+        stmt = stmt.where(counselor_filter)
+        count_stmt = count_stmt.where(counselor_filter)
+
     # Order by newest contacts first
     stmt = stmt.order_by(Record.created_at.desc()).offset((page - 1) * limit).limit(limit)
     
@@ -3396,6 +4154,168 @@ async def get_contacts_list(
         "limit": limit
     }
 
+class AssignLeadPayload(BaseModel):
+    counselor_id: Optional[int] = None
+    counselor_name: Optional[str] = None
+
+@app.post("/api/v1/contacts/{contact_id}/assign")
+@app.patch("/api/v1/contacts/{contact_id}/assign")
+async def assign_contact_lead(
+    contact_id: int,
+    payload: AssignLeadPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Assigns or re-assigns a student/parent lead to an admission counselor."""
+    stmt = select(Record).where(Record.id == contact_id)
+    res = await db.execute(stmt)
+    contact = res.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact lead not found.")
+        
+    if payload.counselor_id:
+        c_stmt = select(AdminUser).where(AdminUser.id == payload.counselor_id)
+        c_res = await db.execute(c_stmt)
+        counselor = c_res.scalar_one_or_none()
+        if counselor:
+            contact.assigned_counselor_id = counselor.id
+            contact.assigned_counselor_name = counselor.full_name or counselor.username
+        else:
+            contact.assigned_counselor_id = payload.counselor_id
+            contact.assigned_counselor_name = payload.counselor_name or "Counselor"
+        contact.counselor_status = 'pending'
+    else:
+        contact.assigned_counselor_id = None
+        contact.assigned_counselor_name = None
+        
+    await db.commit()
+    await db.refresh(contact)
+    return {"status": "success", "contact": contact.to_dict()}
+
+@app.post("/api/v1/contacts/{contact_id}/auto-assign")
+async def auto_assign_lead(
+    contact_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """
+    Dynamically balances lead distribution among active counselors:
+    1. Fetches all active counselor accounts.
+    2. Queries current assigned lead count for each counselor.
+    3. Selects the counselor with the MINIMUM number of assigned leads.
+    4. Automatically assigns contact_id to that counselor.
+    """
+    stmt = select(Record).where(Record.id == contact_id)
+    res = await db.execute(stmt)
+    contact = res.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact lead not found.")
+
+    # 1. Fetch active counselors
+    counselors_stmt = select(AdminUser).where(
+        and_(AdminUser.is_active == True, AdminUser.role == 'counselor')
+    )
+    counselors_res = await db.execute(counselors_stmt)
+    counselors = counselors_res.scalars().all()
+
+    if not counselors:
+        counselors_stmt = select(AdminUser).where(AdminUser.is_active == True)
+        counselors_res = await db.execute(counselors_stmt)
+        counselors = counselors_res.scalars().all()
+
+    if not counselors:
+        raise HTTPException(status_code=400, detail="No active counselor accounts found to assign lead.")
+
+    # 2. Count active pending assigned leads for each active counselor (excluding completed)
+    counts = {}
+    for c in counselors:
+        count_stmt = select(func.count()).select_from(Record).where(
+            and_(
+                Record.assigned_counselor_id == c.id,
+                or_(
+                    Record.counselor_status == None,
+                    Record.counselor_status != 'completed'
+                )
+            )
+        )
+        count_res = await db.execute(count_stmt)
+        counts[c.id] = count_res.scalar() or 0
+
+    # 3. Find counselor with minimum assigned lead count (lowest workload)
+    min_counselor_id = min(counts, key=counts.get)
+    selected_counselor = next(c for c in counselors if c.id == min_counselor_id)
+
+    # 4. Update contact record
+    contact.assigned_counselor_id = selected_counselor.id
+    contact.assigned_counselor_name = selected_counselor.full_name or selected_counselor.username
+    contact.counselor_status = 'pending'
+
+    await db.commit()
+    await db.refresh(contact)
+
+    return {
+        "status": "success",
+        "assigned_to": selected_counselor.to_dict(),
+        "workload_counts": counts,
+        "contact": contact.to_dict()
+    }
+
+@app.get("/api/v1/users/workload")
+async def get_counselors_workload(
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Returns list of active counselors with their current active pending lead counts."""
+    counselors_stmt = select(AdminUser).where(AdminUser.is_active == True)
+    counselors_res = await db.execute(counselors_stmt)
+    counselors = counselors_res.scalars().all()
+
+    workload = []
+    for c in counselors:
+        count_stmt = select(func.count()).select_from(Record).where(
+            and_(
+                Record.assigned_counselor_id == c.id,
+                or_(
+                    Record.counselor_status == None,
+                    Record.counselor_status != 'completed'
+                )
+            )
+        )
+        count_res = await db.execute(count_stmt)
+        workload.append({
+            "counselor": c.to_dict(),
+            "assigned_lead_count": count_res.scalar() or 0
+        })
+
+    return {"workload": workload}
+
+class UpdateLeadNotesPayload(BaseModel):
+    notes: Optional[str] = None
+    pipeline_tag: Optional[str] = None
+
+@app.patch("/api/v1/contacts/{contact_id}/notes")
+async def update_contact_notes(
+    contact_id: int,
+    payload: UpdateLeadNotesPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: AdminUser = Depends(get_current_user)
+):
+    """Updates counselor call notes and lead pipeline stage."""
+    stmt = select(Record).where(Record.id == contact_id)
+    res = await db.execute(stmt)
+    contact = res.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact lead not found.")
+        
+    if payload.notes is not None:
+        contact.counselor_notes = payload.notes
+    if payload.pipeline_tag:
+        contact.pipeline_tag = payload.pipeline_tag
+        
+    await db.commit()
+    await db.refresh(contact)
+    return {"status": "success", "contact": contact.to_dict()}
+
 @app.post("/api/v1/contacts")
 async def create_contact(
     payload: ContactCreatePayload,
@@ -3409,7 +4329,16 @@ async def create_contact(
         cleaned_phone = "91" + cleaned_phone
     elif len(cleaned_phone) < 10:
         raise HTTPException(status_code=400, detail="Invalid phone number. Must be at least 10 digits.")
-        
+
+    cleaned_parent_phone = None
+    if payload.parent_phone_number and payload.parent_phone_number.strip():
+        raw_p = payload.parent_phone_number.strip()
+        cleaned_p = "".join(filter(str.isdigit, raw_p))
+        if len(cleaned_p) == 10:
+            cleaned_p = "91" + cleaned_p
+        if len(cleaned_p) >= 10:
+            cleaned_parent_phone = cleaned_p
+
     # Check duplicate
     stmt = select(Record).where(Record.phone_number == cleaned_phone)
     res = await db.execute(stmt)
@@ -3424,6 +4353,7 @@ async def create_contact(
         student_name=payload.student_name.strip(),
         parent_name=payload.parent_name.strip(),
         phone_number=cleaned_phone,
+        parent_phone_number=cleaned_parent_phone,
         selected_branch=payload.selected_branch.strip(),
         pipeline_tag=payload.pipeline_tag or "Lead",
         campaign_status="Pending",
@@ -3480,6 +4410,16 @@ async def update_contact(
                 detail=f"Another contact with phone number {cleaned_phone} already exists."
             )
         contact.phone_number = cleaned_phone
+
+    if payload.parent_phone_number is not None:
+        raw_p = payload.parent_phone_number.strip() if payload.parent_phone_number else ""
+        if raw_p:
+            cleaned_p = "".join(filter(str.isdigit, raw_p))
+            if len(cleaned_p) == 10:
+                cleaned_p = "91" + cleaned_p
+            contact.parent_phone_number = cleaned_p if len(cleaned_p) >= 10 else None
+        else:
+            contact.parent_phone_number = None
         
     # Update variables values too
     vars_dict = dict(contact.variables or {})
@@ -3527,13 +4467,10 @@ async def upload_contacts(
         )
         
     try:
-        contents = await file.read()
-        logger.info(f"upload_contacts: file read complete, size={len(contents)} bytes")
-        if file.filename.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(contents))
-        else:
-            df = pd.read_excel(io.BytesIO(contents))
+        df = await parse_spreadsheet_safely(file)
         logger.info(f"upload_contacts: df parsing complete, shape={df.shape}")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to read file: {e}")
         raise HTTPException(status_code=400, detail=f"File parse error: {str(e)}")
@@ -3544,6 +4481,7 @@ async def upload_contacts(
     parent_col = None
     branch_col = None
     phone_col = None
+    parent_phone_col = None
     
     for i, col in enumerate(columns):
         if col in ["student name", "student_name", "student", "candidate name", "candidate"]:
@@ -3552,7 +4490,9 @@ async def upload_contacts(
             parent_col = df.columns[i]
         elif col in ["selected branch", "selected_branch", "branch", "course", "selected course"]:
             branch_col = df.columns[i]
-        elif col in ["phone number", "phone_number", "phone", "mobile", "mobile number", "contact", "phone_no"]:
+        elif col in ["parent phone number", "parent_phone_number", "parent phone", "parent mobile", "parent_mobile", "father mobile", "father phone", "mother mobile", "mother phone", "parent_phone_no", "parent contact", "parent_contact"]:
+            parent_phone_col = df.columns[i]
+        elif col in ["phone number", "phone_number", "phone", "mobile", "mobile number", "contact", "phone_no", "student phone number", "student_phone_number", "student phone", "student mobile"]:
             phone_col = df.columns[i]
 
     if not phone_col:
@@ -3576,6 +4516,16 @@ async def upload_contacts(
             cleaned_phone = "91" + cleaned_phone
         elif len(cleaned_phone) < 10:
             continue
+
+        parent_phone = None
+        if parent_phone_col and not pd.isna(row[parent_phone_col]):
+            raw_parent_phone = str(row[parent_phone_col]).strip()
+            if raw_parent_phone and raw_parent_phone.lower() != "nan":
+                cleaned_parent = "".join(filter(str.isdigit, raw_parent_phone))
+                if len(cleaned_parent) == 10:
+                    parent_phone = "91" + cleaned_parent
+                elif len(cleaned_parent) >= 10:
+                    parent_phone = cleaned_parent
             
         student_name = str(row[student_col]).strip() if student_col and not pd.isna(row[student_col]) else "N/A"
         parent_name = str(row[parent_col]).strip() if parent_col and not pd.isna(row[parent_col]) else "N/A"
@@ -3609,6 +4559,7 @@ async def upload_contacts(
             "parent_name": parent_name,
             "selected_branch": branch,
             "phone_number": cleaned_phone,
+            "parent_phone_number": parent_phone,
             "variables": row_variables
         })
 
@@ -3632,6 +4583,8 @@ async def upload_contacts(
             rec.student_name = record_data["student_name"]
             rec.parent_name = record_data["parent_name"]
             rec.selected_branch = record_data["selected_branch"]
+            if record_data.get("parent_phone_number"):
+                rec.parent_phone_number = record_data["parent_phone_number"]
             rec.variables = {**(rec.variables or {}), **record_data["variables"]}
             updated_count += 1
         else:
@@ -3640,6 +4593,7 @@ async def upload_contacts(
                 parent_name=record_data["parent_name"],
                 selected_branch=record_data["selected_branch"],
                 phone_number=phone,
+                parent_phone_number=record_data.get("parent_phone_number"),
                 variables=record_data["variables"],
                 campaign_status="Pending",
                 delivery_status="Unsent",

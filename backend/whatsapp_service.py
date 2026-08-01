@@ -308,8 +308,8 @@ class MetaWhatsAppClient(WhatsAppClient):
                             val = template_variables.get("student_name") or template_variables.get("student")
                         elif norm_var in ["parentname", "parent", "fathername", "mothername", "guardianname", "guardian"]:
                             val = template_variables.get("parent_name") or template_variables.get("parent")
-                        elif norm_var in ["selectedbranch", "branch", "course", "selectedcourse", "status", "admissionstatus"]:
-                            val = template_variables.get("selected_branch") or template_variables.get("branch") or template_variables.get("status")
+                        elif norm_var in ["selectedbranch", "branch", "course", "selectedcourse", "status", "admissionstatus", "dept", "department"]:
+                            val = template_variables.get("selected_branch") or template_variables.get("branch") or template_variables.get("status") or template_variables.get("dept") or template_variables.get("department")
                 
                 # If still None, check positional indices or fall back to default string
                 if val is None:
@@ -344,27 +344,21 @@ class MetaWhatsAppClient(WhatsAppClient):
                         "text": resolved_values[k]
                     })
             else:
-                # Named parameters require "parameter_name" key
+                # For named Meta Cloud API template parameters, include parameter_name
                 for var_name in vars_list:
                     parameters.append({
                         "type": "text",
-                        "parameter_name": var_name,
-                        "text": resolved_values[var_name]
+                        "text": resolved_values[var_name],
+                        "parameter_name": var_name
                     })
 
         components = []
-        body_component = {
-            "type": "body",
-            "parameters": parameters
-        }
-        # Only append body component if there are parameters, or if parameters is empty, we can still append body with empty parameters.
-        # Actually, if parameters is empty, it is safer to still append the body component but with empty parameters,
-        # or omit the body component completely. In Meta, for templates with 0 parameters, the API is fine with either omitting
-        # or passing parameters: []. Passing parameters: [] is safer in many SDKs, but let's see.
-        # Let's check: details: "body: number of localizable_params (3) does not match the expected number of params (0)"
-        # This error happened because we sent 3 parameters. If we send 0 parameters, Meta will match it perfectly.
-        # Let's keep body_component in components.
-        components.append(body_component)
+        if parameters:
+            body_component = {
+                "type": "body",
+                "parameters": parameters
+            }
+            components.append(body_component)
 
         # Handle header media attachments if any
         if media_type != "none" and media_url:
@@ -739,10 +733,16 @@ def get_whatsapp_client(client_type_override: Optional[str] = None) -> WhatsAppC
     Default type is 'mock'. Can be extended to support 'twilio', 'meta_cloud', etc.
     """
     import os
+    env_client_type = os.getenv("WHATSAPP_CLIENT_TYPE", "mock").lower()
+    
+    # In production Meta mode, we force Meta and completely ignore client-side header overrides
+    if env_client_type in ["meta", "meta_cloud"]:
+        return MetaWhatsAppClient()
+        
     if client_type_override:
         client_type = client_type_override.lower()
     else:
-        client_type = os.getenv("WHATSAPP_CLIENT_TYPE", "mock").lower()
+        client_type = env_client_type
     
     if client_type == "mock":
         return MockWhatsAppClient()

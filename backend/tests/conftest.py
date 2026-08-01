@@ -8,6 +8,7 @@ if backend_dir not in sys.path:
 
 # 2. Force SQLite in-memory DATABASE_URL before importing database module
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["META_APP_SECRET"] = ""
 
 import pytest
 import asyncio
