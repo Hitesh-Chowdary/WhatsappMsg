@@ -4613,3 +4613,23 @@ async def upload_contacts(
         "added": added_count,
         "updated": updated_count
     }
+
+
+# --- SPA Catch-All Fallback Route ---
+# Serves index.html for any frontend React routes (e.g. /super-admin/dashboard, /counselor/inbox) on hard refresh (F5)
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def serve_spa_fallback(request: Request, full_path: str):
+    """Fallback handler to support client-side React SPA routing on page refresh."""
+    # Don't intercept API requests
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API endpoint not found.")
+        
+    react_index = os.path.join(DIST_DIR, "index.html")
+    if os.path.exists(react_index):
+        return FileResponse(react_index)
+        
+    legacy_index = os.path.join(templates_path, "index.html")
+    if os.path.exists(legacy_index):
+        return templates.TemplateResponse(request, "index.html")
+        
+    raise HTTPException(status_code=404, detail="Frontend build index.html not found.")
