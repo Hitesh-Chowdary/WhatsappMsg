@@ -268,6 +268,12 @@ function App() {
       if (res.ok) {
         const u = await res.json();
         setCurrentUser(u);
+        localStorage.setItem('currentUserObj', JSON.stringify(u));
+        // Sync activeView with current URL pathname to prevent view jumping on refresh
+        const viewFromUrl = getViewFromPath(window.location.pathname, u.role);
+        if (viewFromUrl) {
+          setActiveView(viewFromUrl);
+        }
       }
     } catch (err) {
       console.error("Failed to fetch user profile:", err);
