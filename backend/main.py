@@ -2095,17 +2095,15 @@ def match_keyword(keyword: str, text: str) -> bool:
     txt = text.lower().strip()
     
     # 1. Exact match (ignoring case & extra spaces)
+    # 1. Exact match
     if kw == txt:
         return True
         
-    # 2. Specific exclusion: if keyword is 'interested' but parent says 'not interested', it's a negative response
-    if kw == "interested" and "not interested" in txt:
-        return False
-        
-    # 3. Word boundary regex search
-    pattern = rf"\b{re.escape(kw)}\b"
-    if re.search(pattern, txt):
-        return True
+    # 2. Word boundary search for longer multi-word phrases (len > 2)
+    if len(kw) > 2:
+        pattern = rf"\b{re.escape(kw)}\b"
+        if re.search(pattern, txt):
+            return True
         
     return False
 
@@ -2124,14 +2122,16 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         nodes = flow_data.get("nodes", [])
         edges = flow_data.get("edges", [])
         
-        # Find trigger node that matches the message text
+        # Sort trigger nodes by keyword length descending (so "not ok" is evaluated before "ok")
+        trigger_nodes = [n for n in nodes if n.get("type") == "trigger"]
+        trigger_nodes.sort(key=lambda n: len(n.get("data", {}).get("keyword", "")), reverse=True)
+        
         trigger_node = None
-        for node in nodes:
-            if node.get("type") == "trigger":
-                keyword = node.get("data", {}).get("keyword", "").lower().strip()
-                if keyword and match_keyword(keyword, normalized_text):
-                    trigger_node = node
-                    break
+        for node in trigger_nodes:
+            keyword = node.get("data", {}).get("keyword", "").lower().strip()
+            if keyword and match_keyword(keyword, normalized_text):
+                trigger_node = node
+                break
         
         # If no explicit keyword trigger matches, look for default trigger
         if not trigger_node:
