@@ -4851,6 +4851,8 @@ function App() {
                     className="filter-select"
                     style={{ width: '100%' }}
                   >
+                    <option value="1">1 Page (Only This Specific URL - Instant)</option>
+                    <option value="5">5 Internal Pages (Fast)</option>
                     <option value="10">10 Internal Pages</option>
                     <option value="25">25 Internal Pages</option>
                     <option value="50">50 Internal Pages</option>

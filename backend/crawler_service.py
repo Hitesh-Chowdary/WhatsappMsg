@@ -1,6 +1,7 @@
 import re
 import os
 import logging
+import asyncio
 from typing import List, Dict, Any, Set
 from urllib.parse import urlparse, urljoin
 import httpx
@@ -70,7 +71,7 @@ def extract_domain_links(html_content: str, base_url: str, target_domain: str) -
 
 async def crawl_website(root_url: str, max_pages: int = 25) -> Dict[str, Any]:
     """
-    Crawls internal pages of a website domain up to max_pages,
+    Crawls internal pages of a website domain concurrently up to max_pages,
     extracting clean text for the AI Knowledge Base.
     """
     if not root_url.startswith(("http://", "https://")):
@@ -83,34 +84,58 @@ async def crawl_website(root_url: str, max_pages: int = 25) -> Dict[str, Any]:
     to_visit: List[str] = [root_url]
     crawled_pages: List[Dict[str, Any]] = []
 
-    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=12.0) as client:
+    sem = asyncio.Semaphore(5)
+
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=10.0) as client:
+        async def fetch_page(url: str):
+            async with sem:
+                try:
+                    logger.info(f"Crawling website page: {url}")
+                    res = await client.get(url)
+                    if res.status_code == 200 and "text/html" in res.headers.get("content-type", ""):
+                        title, clean_text = clean_extracted_text(res.text)
+                        if len(clean_text) > 100:
+                            links = extract_domain_links(res.text, url, target_domain)
+                            return {
+                                "url": url,
+                                "domain": target_domain,
+                                "title": title,
+                                "text": clean_text,
+                                "links": links
+                            }
+                except Exception as e:
+                    logger.warning(f"Failed to crawl page {url}: {e}")
+                return None
+
+        # Process first page
+        first_page = await fetch_page(root_url)
+        visited_urls.add(root_url)
+        if first_page:
+            crawled_pages.append(first_page)
+            for link in first_page.get("links", []):
+                if link not in visited_urls and link not in to_visit:
+                    to_visit.append(link)
+
+        # Process remaining pages concurrently in batches
         while to_visit and len(crawled_pages) < max_pages:
-            current_url = to_visit.pop(0)
-            if current_url in visited_urls:
-                continue
+            batch_size = min(max_pages - len(crawled_pages), 5)
+            batch_urls = []
+            while to_visit and len(batch_urls) < batch_size:
+                u = to_visit.pop(0)
+                if u not in visited_urls:
+                    visited_urls.add(u)
+                    batch_urls.append(u)
 
-            visited_urls.add(current_url)
+            if not batch_urls:
+                break
 
-            try:
-                logger.info(f"Crawling website page: {current_url}")
-                res = await client.get(current_url)
-                if res.status_code == 200 and "text/html" in res.headers.get("content-type", ""):
-                    title, clean_text = clean_extracted_text(res.text)
-                    if len(clean_text) > 100:  # Only index pages with meaningful content
-                        crawled_pages.append({
-                            "url": current_url,
-                            "domain": target_domain,
-                            "title": title,
-                            "text": clean_text
-                        })
-
-                    # Extract new links to visit
-                    new_links = extract_domain_links(res.text, current_url, target_domain)
-                    for link in new_links:
+            results = await asyncio.gather(*(fetch_page(u) for u in batch_urls))
+            for res in results:
+                if res and len(crawled_pages) < max_pages:
+                    crawled_pages.append(res)
+                    for link in res.get("links", []):
                         if link not in visited_urls and link not in to_visit:
                             to_visit.append(link)
-            except Exception as e:
-                logger.warning(f"Failed to crawl {current_url}: {e}")
 
     return {
         "status": "success",
