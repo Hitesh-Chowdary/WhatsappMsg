@@ -392,37 +392,48 @@ class WebsiteKnowledge(Base):
 
 async def init_db():
     """Initializes the database schema by creating required tables and seeding default template."""
-    async with engine.begin() as conn:
-        # Create all tables in the database if they do not exist
-        await conn.run_sync(Base.metadata.create_all)
-        # Apply columns dynamically for compatibility
-        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS media_type VARCHAR(50) DEFAULT 'none'"))
-        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS media_url VARCHAR(1000)"))
-        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS template_name VARCHAR(255)"))
-        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'MARKETING'"))
-        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS language VARCHAR(50) DEFAULT 'en'"))
-        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS variable_names VARCHAR(500)"))
-        await conn.execute(text("ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT false"))
-        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS sent_template VARCHAR(255)"))
-        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'"))
-        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS pipeline_tag VARCHAR(50) DEFAULT 'Lead'"))
-        await conn.execute(text("ALTER TABLE record_notes ADD COLUMN IF NOT EXISTS resolved BOOLEAN DEFAULT false"))
-        await conn.execute(text("ALTER TABLE bot_flows ADD COLUMN IF NOT EXISTS template_name VARCHAR(255)"))
-        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS parent_phone_number VARCHAR(50)"))
-        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS assigned_counselor_id INTEGER"))
-        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS assigned_counselor_name VARCHAR(255)"))
-        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS counselor_notes TEXT"))
-        await conn.execute(text("ALTER TABLE records ADD COLUMN IF NOT EXISTS counselor_status VARCHAR(50) DEFAULT 'active'"))
-        await conn.execute(text("ALTER TABLE campaign_logs ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(50) DEFAULT 'parent'"))
-        await conn.execute(text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(50) DEFAULT 'parent'"))
-        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS email VARCHAR(255)"))
-        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255) DEFAULT 'System Administrator'"))
-        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'super_admin'"))
-        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true"))
-        await conn.execute(text("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
-        await conn.execute(text("UPDATE admin_users SET email = 'admin@institution.edu.in' WHERE email IS NULL AND username = 'admin'"))
-        await conn.execute(text("UPDATE admin_users SET full_name = 'System Administrator' WHERE full_name IS NULL AND username = 'admin'"))
-        await conn.execute(text("UPDATE admin_users SET role = 'super_admin' WHERE role IS NULL AND username = 'admin'"))
+    try:
+        async with engine.begin() as conn:
+            # Create all tables in the database if they do not exist
+            await conn.run_sync(Base.metadata.create_all)
+            
+            # Execute ALTER statements safely
+            alter_statements = [
+                "ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS media_type VARCHAR(50) DEFAULT 'none'",
+                "ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS media_url VARCHAR(1000)",
+                "ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS template_name VARCHAR(255)",
+                "ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'MARKETING'",
+                "ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS language VARCHAR(50) DEFAULT 'en'",
+                "ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS variable_names VARCHAR(500)",
+                "ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT false",
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS sent_template VARCHAR(255)",
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS variables JSON DEFAULT '{}'",
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS pipeline_tag VARCHAR(50) DEFAULT 'Lead'",
+                "ALTER TABLE record_notes ADD COLUMN IF NOT EXISTS resolved BOOLEAN DEFAULT false",
+                "ALTER TABLE bot_flows ADD COLUMN IF NOT EXISTS template_name VARCHAR(255)",
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS parent_phone_number VARCHAR(50)",
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS assigned_counselor_id INTEGER",
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS assigned_counselor_name VARCHAR(255)",
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS counselor_notes TEXT",
+                "ALTER TABLE records ADD COLUMN IF NOT EXISTS counselor_status VARCHAR(50) DEFAULT 'active'",
+                "ALTER TABLE campaign_logs ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(50) DEFAULT 'parent'",
+                "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(50) DEFAULT 'parent'",
+                "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS email VARCHAR(255)",
+                "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255) DEFAULT 'System Administrator'",
+                "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'super_admin'",
+                "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true",
+                "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
+                "UPDATE admin_users SET email = 'admin@institution.edu.in' WHERE email IS NULL AND username = 'admin'",
+                "UPDATE admin_users SET full_name = 'System Administrator' WHERE full_name IS NULL AND username = 'admin'",
+                "UPDATE admin_users SET role = 'super_admin' WHERE role IS NULL AND username = 'admin'"
+            ]
+            for stmt in alter_statements:
+                try:
+                    await conn.execute(text(stmt))
+                except Exception as stmt_err:
+                    logger.warning(f"Ignored minor DDL migration notice: {stmt_err}")
+    except Exception as e:
+        logger.warning(f"Database schema init notice: {e}")
         
     # Seed default templates if empty
     async with AsyncSessionLocal() as session:
