@@ -44,6 +44,15 @@ def main():
                         script_content = sf.read()
                     script_content_lf = script_content.replace(b"\r\n", b"\n")
                     zipf.writestr(f, script_content_lf)
+                elif f == ".env.example" and args.mac.strip():
+                    with open(f, "r", encoding="utf-8") as env_f:
+                        env_text = env_f.read()
+                    if "ALLOWED_MAC_ADDRESS=" in env_text:
+                        env_text = env_text.replace("ALLOWED_MAC_ADDRESS=", f"ALLOWED_MAC_ADDRESS={args.mac.strip().upper()}")
+                    else:
+                        env_text += f"\n# Hardware License Lock\nALLOWED_MAC_ADDRESS={args.mac.strip().upper()}\n"
+                    zipf.writestr(f, env_text)
+                    print(f"  └─ Embedded Hardware License Lock for MAC: {args.mac.strip().upper()}")
                 else:
                     zipf.write(f)
             else:

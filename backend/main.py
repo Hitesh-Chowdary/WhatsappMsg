@@ -437,6 +437,18 @@ async def run_bulk_send_campaign(db_session_factory, whatsapp_client: WhatsAppCl
 # FastAPI lifespan for database setup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Hardware License Verification (Optional MAC Lock)
+    allowed_mac = os.getenv("ALLOWED_MAC_ADDRESS")
+    if allowed_mac and allowed_mac.strip():
+        import uuid
+        mac_raw = uuid.getnode()
+        current_mac = ':'.join(['{:02x}'.format((mac_raw >> ele) & 0xff) for ele in range(0, 8*6, 8)][::-1]).upper()
+        clean_allowed = allowed_mac.strip().upper().replace("-", ":")
+        if current_mac != clean_allowed and clean_allowed not in current_mac:
+            logger.critical(f"UNAUTHORIZED HARDWARE LICENSE: Server MAC ({current_mac}) does not match authorized MAC ({clean_allowed})!")
+            raise RuntimeError(f"Unauthorized Hardware: Application is licensed for MAC {clean_allowed}, but running on {current_mac}")
+        logger.info(f"Hardware License Verified for MAC: {current_mac}")
+
     # Setup table schemas in PostgreSQL
     logger.info("Initializing PostgreSQL database schemas...")
     await init_db()
