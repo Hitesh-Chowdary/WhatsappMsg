@@ -536,7 +536,6 @@ function App() {
       case 'outreach': return '/super-admin/dashboard';
       case 'chat': return '/super-admin/inbox';
       case 'bot-builder': return '/super-admin/bot-builder';
-      case 'brochures': return '/super-admin/brochures';
       case 'reminders': return '/super-admin/reminders';
       case 'contacts': return '/super-admin/contacts';
       case 'team': return '/super-admin/team';
@@ -552,7 +551,6 @@ function App() {
     if (path.includes('inbox') || path.includes('chat')) return 'chat';
     if (path.includes('outreach') || path.includes('dashboard')) return 'outreach';
     if (path.includes('bot-builder')) return 'bot-builder';
-    if (path.includes('brochures')) return 'brochures';
     if (path.includes('reminders')) return 'reminders';
     if (path.includes('contacts')) return 'contacts';
     if (path.includes('team')) return 'team';
@@ -2768,28 +2766,7 @@ function App() {
                   <line x1="9" y1="12" x2="21" y2="12"></line>
                 </svg>
                 {isSidebarOpen && <span>Visual Bot Builder</span>}
-              </button>
-
-              <button 
-                className={`sidebar-menu-item ${activeView === 'brochures' ? 'active' : ''}`}
-                onClick={() => {
-                  navigateToView('brochures');
-                  fetchBrochures();
-                  fetchWebsitePages();
-                }}
-                style={{ 
-                  justifyContent: isSidebarOpen ? 'flex-start' : 'center', 
-                  padding: isSidebarOpen ? '0.75rem 1rem' : '0.75rem 0' 
-                }}
-                title={!isSidebarOpen ? "AI Brochure Bot" : undefined}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                </svg>
-                {isSidebarOpen && <span>AI Brochure Bot</span>}
-              </button>
-            </>
+              </button>            </>
           )}
  
           <button 
