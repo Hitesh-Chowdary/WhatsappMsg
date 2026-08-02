@@ -2251,7 +2251,12 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         }
 
     if any(phrase in normalized_text for phrase in ["contact staff", "call staff", "ask counselor", "contact counselor", "call counselor", "talk to staff"]):
-        record.parent_response = "Counselor Needed"
+        if record:
+            record.parent_response = "Counselor Needed"
+            vars_copy = dict(record.variables or {})
+            vars_copy["contact_requested"] = True
+            vars_copy["scheduled_call"] = f"Call Request: {message_text.strip()}"
+            record.variables = vars_copy
         return {
             "reply_text": "Thank you! Our admissions team has been notified, and an outreach counselor will assist you here shortly.",
             "buttons": [],
@@ -2298,7 +2303,12 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
             "source_keyword": default_rule.keyword
         }
         
-    record.parent_response = "Counselor Needed"
+    if record:
+        record.parent_response = "Counselor Needed"
+        vars_copy = dict(record.variables or {})
+        vars_copy["contact_requested"] = True
+        vars_copy["scheduled_call"] = f"Inquiry: {message_text.strip()}"
+        record.variables = vars_copy
     return {
         "reply_text": f"Thank you for your inquiry regarding *{message_text.strip()}*! Our admissions team has been notified, and an outreach counselor will assist you here shortly.",
         "buttons": ["Ask Counselor"],
@@ -2949,9 +2959,13 @@ async def get_reminders(
     current_user: AdminUser = Depends(get_current_user)
 ):
     """Fetches all records that have a scheduled call reminder active."""
+    from sqlalchemy import or_
     conditions = [
-        Record.variables.is_not(None),
-        Record.variables["scheduled_call"].is_not(None)
+        or_(
+            and_(Record.variables.is_not(None), Record.variables["scheduled_call"].is_not(None)),
+            Record.parent_response == "Counselor Needed",
+            Record.parent_response == "Needs Followup"
+        )
     ]
     if current_user.role == 'counselor':
         conditions.append(Record.assigned_counselor_id == current_user.id)

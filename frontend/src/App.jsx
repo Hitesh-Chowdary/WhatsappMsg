@@ -5456,7 +5456,7 @@ function App() {
                               alignItems: 'center',
                               gap: '0.35rem'
                             }}>
-                              📞 {rem.scheduled_call}
+                              📞 {rem.scheduled_call || rem.variables?.scheduled_call || rem.parent_response || 'Counselor Callback Requested'}
                             </span>
                           </td>
                           <td>

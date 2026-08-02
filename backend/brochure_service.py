@@ -130,22 +130,39 @@ Guidelines:
 
     # 2. Clean Extractive Fallback for Uploaded PDFs & Documents
     keywords = [w.lower().strip() for w in re.findall(r'\w+', query_text) if len(w) > 2]
+    if not keywords:
+        keywords = [query_text.lower().strip()]
     
     clean_matches = []
     for doc in all_docs:
         doc_text = getattr(doc, "extracted_text", "")
-        if not doc_text:
+        doc_title = getattr(doc, "title", "") or getattr(doc, "filename", "") or ""
+        doc_title_lower = doc_title.lower()
+
+        if not doc_text and not doc_title:
             continue
+
+        # Clean noise headers from doc text
+        cleaned_doc_text = re.sub(r'(?i)skip to content\s*', '', doc_text or '')
+        cleaned_doc_text = re.sub(r'(?i)public self disclosure\s*', '', cleaned_doc_text)
+
+        # Title match bonus
+        title_score = sum(5 for kw in keywords if kw in doc_title_lower)
+
         # Split into paragraphs/lines
-        paras = [p.strip() for p in re.split(r'[\n\r]+', doc_text) if len(p.strip()) > 15]
+        paras = [p.strip() for p in re.split(r'[\n\r]+', cleaned_doc_text) if len(p.strip()) > 10]
+        
+        if not paras and title_score > 0:
+            paras = [cleaned_doc_text[:300] if cleaned_doc_text else f"Information available under {doc_title}"]
+
         for p in paras:
             p_lower = p.lower()
-            # Ignore noise lines
-            if any(noise in p_lower for noise in ["skip to content", "public self disclosure", "s.no title", "links on website"]):
-                continue
-            match_score = sum(1 for kw in keywords if kw in p_lower)
+            match_score = title_score + sum(1 for kw in keywords if kw in p_lower)
             if match_score > 0:
-                clean_matches.append((match_score, p))
+                # Clean up any leftover noise prefixes
+                clean_p = re.sub(r'^(?:Skip to content|About The University|Built for Future)\s*', '', p, flags=re.IGNORECASE).strip()
+                if len(clean_p) > 10:
+                    clean_matches.append((match_score, clean_p))
 
     if clean_matches:
         clean_matches.sort(key=lambda x: x[0], reverse=True)
@@ -161,7 +178,7 @@ Guidelines:
                 
         bullet_content = "\n\n• ".join(top_excerpts)
         reply_text = (
-            f"Here is what our document mentions regarding *{query_text.strip()}*:\n\n"
+            f"Here is what our records mention regarding *{query_text.strip()}*:\n\n"
             f"• {bullet_content}\n\n"
             f"If you need further details, feel free to ask or connect with a counselor!"
         )
