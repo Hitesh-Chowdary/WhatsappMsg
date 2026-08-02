@@ -884,9 +884,13 @@ async def upload_records(
 
     phone_numbers = []
     records_to_process = []
+    skipped_info = []
     
-    for _, row in df.iterrows():
+    for row_idx, row in df.iterrows():
         raw_phone = str(row[phone_col]).strip()
+        student_name = str(row[student_col]).strip() if student_col and not pd.isna(row[student_col]) else "N/A"
+        if student_name.lower() == "nan": student_name = "N/A"
+
         if not raw_phone or pd.isna(row[phone_col]) or raw_phone.lower() == "nan":
             continue
             
@@ -896,8 +900,8 @@ async def upload_records(
         # Format Indian phone numbers missing country codes (10 digits)
         if len(cleaned_phone) == 10:
             cleaned_phone = "91" + cleaned_phone
-        elif len(cleaned_phone) < 10:
-            # Skip invalid phone numbers
+        elif len(cleaned_phone) < 10 or len(cleaned_phone) > 15:
+            skipped_info.append(f"Row {row_idx + 2} ({student_name}): Phone '{raw_phone}' has {len(cleaned_phone)} digits (10 digits required)")
             continue
             
         # Extract parent phone if present
@@ -911,11 +915,9 @@ async def upload_records(
                 elif len(cleaned_parent) >= 10:
                     parent_phone = cleaned_parent
 
-        student_name = str(row[student_col]).strip() if student_col and not pd.isna(row[student_col]) else "N/A"
         parent_name = str(row[parent_col]).strip() if parent_col and not pd.isna(row[parent_col]) else "N/A"
         branch = str(row[branch_col]).strip() if branch_col and not pd.isna(row[branch_col]) else "N/A"
         
-        if student_name.lower() == "nan": student_name = "N/A"
         if parent_name.lower() == "nan": parent_name = "N/A"
         if branch.lower() == "nan": branch = "N/A"
         
@@ -952,6 +954,9 @@ async def upload_records(
         })
 
     if not records_to_process:
+        if skipped_info:
+            err_details = "; ".join(skipped_info[:3])
+            raise HTTPException(status_code=400, detail=f"No valid 10-digit phone numbers found. {err_details}")
         logger.warning("upload_records: no valid records parsed")
         raise HTTPException(status_code=400, detail="No valid records parsed from the sheet.")
 
@@ -965,12 +970,23 @@ async def upload_records(
     added_count = 0
     updated_count = 0
     
-    record_ids_to_reset = []
     for record_data in records_to_process:
         phone = record_data["phone_number"]
         if phone in existing_records:
-            # Ignore/skip duplicate phone numbers on Excel upload
-            continue
+            rec = existing_records[phone]
+            if record_data["student_name"] and record_data["student_name"] != "N/A":
+                rec.student_name = record_data["student_name"]
+            if record_data["parent_name"] and record_data["parent_name"] != "N/A":
+                rec.parent_name = record_data["parent_name"]
+            if record_data["selected_branch"] and record_data["selected_branch"] != "N/A":
+                rec.selected_branch = record_data["selected_branch"]
+            if record_data.get("parent_phone_number"):
+                rec.parent_phone_number = record_data["parent_phone_number"]
+            
+            existing_vars = dict(rec.variables or {})
+            existing_vars.update(record_data["variables"])
+            rec.variables = existing_vars
+            updated_count += 1
         else:
             # Create a brand new record
             rec = Record(
@@ -986,22 +1002,31 @@ async def upload_records(
             )
             db.add(rec)
             added_count += 1
-            
-    # Delete existing campaign logs ONLY for records that were reset
-    if record_ids_to_reset:
-        from database import CampaignLog
-        from sqlalchemy import delete
-        await db.execute(delete(CampaignLog).where(CampaignLog.record_id.in_(record_ids_to_reset)))
 
     logger.info("upload_records: committing to database...")
     await db.commit()
     logger.info("upload_records: commit successful!")
+
+    msg_parts = []
+    if added_count > 0:
+        msg_parts.append(f"Added {added_count} new candidate(s)")
+    if updated_count > 0:
+        msg_parts.append(f"Updated {updated_count} existing candidate(s)")
+    if not msg_parts:
+        msg_parts.append("Processed spreadsheet")
+
+    final_msg = ", ".join(msg_parts) + "."
+    if skipped_info:
+        final_msg += f" Note: {len(skipped_info)} row(s) skipped due to invalid phone numbers: " + "; ".join(skipped_info[:3])
+
     return {
         "status": "success",
-        "message": f"Excel parsed successfully. Added {added_count} new entries, updated {updated_count} existing entries.",
-        "columns": df.columns.tolist(), # Return detected spreadsheet headers to show in the UI
+        "message": final_msg,
+        "columns": df.columns.tolist(),
         "added": added_count,
-        "updated": updated_count
+        "updated": updated_count,
+        "skipped": len(skipped_info),
+        "skipped_details": skipped_info
     }
 
 # Template GET / POST Endpoints
