@@ -986,7 +986,16 @@ async def upload_records(
             existing_vars = dict(rec.variables or {})
             existing_vars.update(record_data["variables"])
             rec.variables = existing_vars
+            rec.campaign_status = "Pending"
+            rec.delivery_status = "Unsent"
             updated_count += 1
+
+            # Reset any existing CampaignLog entries for this record so new broadcast fires
+            log_stmt = select(CampaignLog).where(CampaignLog.record_id == rec.id)
+            log_res = await db.execute(log_stmt)
+            for clog in log_res.scalars().all():
+                clog.campaign_status = "Pending"
+                clog.delivery_status = "Unsent"
         else:
             # Create a brand new record
             rec = Record(
@@ -4697,7 +4706,16 @@ async def upload_contacts(
             if record_data.get("parent_phone_number"):
                 rec.parent_phone_number = record_data["parent_phone_number"]
             rec.variables = {**(rec.variables or {}), **record_data["variables"]}
+            rec.campaign_status = "Pending"
+            rec.delivery_status = "Unsent"
             updated_count += 1
+
+            # Reset any existing CampaignLog entries so new broadcast fires for daily absentees
+            log_stmt = select(CampaignLog).where(CampaignLog.record_id == rec.id)
+            log_res = await db.execute(log_stmt)
+            for clog in log_res.scalars().all():
+                clog.campaign_status = "Pending"
+                clog.delivery_status = "Unsent"
         else:
             rec = Record(
                 student_name=record_data["student_name"],
