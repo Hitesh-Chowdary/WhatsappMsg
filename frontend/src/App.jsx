@@ -1305,33 +1305,43 @@ function App() {
     pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter };
   }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter]);
 
-  const forceChatScrollRef = useRef(false);
+  const prevChatHistoryLengthRef = useRef(0);
 
-  // Auto-scroll to the bottom of chat messages intelligently (does not interrupt manual scroll-up)
+  // Auto-scroll to the bottom of chat messages intelligently (always scrolls on initial open / history load)
   useEffect(() => {
     if (!activeChatRecordId) return;
 
-    const timer = setTimeout(() => {
+    const scrollToBottom = () => {
       const container = chatContainerRef.current;
       if (container) {
-        const isNewChat = prevActiveChatRecordIdRef.current !== activeChatRecordId;
-        prevActiveChatRecordIdRef.current = activeChatRecordId;
-
-        const threshold = 120;
-        const isNearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) <= threshold;
-
-        if (isNewChat || isNearBottom || forceChatScrollRef.current) {
-          container.scrollTop = container.scrollHeight;
-          if (chatBottomRef.current) {
-            chatBottomRef.current.scrollIntoView({ behavior: 'instant', block: 'end' });
-          }
-          forceChatScrollRef.current = false;
+        container.scrollTop = container.scrollHeight;
+        if (chatBottomRef.current) {
+          chatBottomRef.current.scrollIntoView({ behavior: 'instant', block: 'end' });
         }
       }
-    }, 80);
+    };
 
-    return () => clearTimeout(timer);
-  }, [chatHistory, activeChatRecordId]);
+    const isNewChat = prevActiveChatRecordIdRef.current !== activeChatRecordId;
+    const historyJustLoaded = prevChatHistoryLengthRef.current === 0 && chatHistory.length > 0;
+    
+    prevActiveChatRecordIdRef.current = activeChatRecordId;
+    prevChatHistoryLengthRef.current = chatHistory.length;
+
+    const container = chatContainerRef.current;
+    const threshold = 150;
+    const isNearBottom = container ? (container.scrollHeight - container.scrollTop - container.clientHeight) <= threshold : true;
+
+    if (isNewChat || historyJustLoaded || isNearBottom || forceChatScrollRef.current) {
+      scrollToBottom();
+      const timer1 = setTimeout(scrollToBottom, 50);
+      const timer2 = setTimeout(scrollToBottom, 200);
+      forceChatScrollRef.current = false;
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+      };
+    }
+  }, [chatHistory, activeChatRecordId, chatThreadFilter, activeChatSubTab]);
 
   // Sync activeView to localStorage
   useEffect(() => {
