@@ -217,25 +217,26 @@ Guidelines:
     # 0. Check for casual greetings / small talk first
     query_lower = query_text.lower().strip()
     greeting_words = ["hello", "hi", "hey", "hlo", "good morning", "good afternoon", "good evening", "namaste", "start", "menu", "greetings"]
+    name_str = f" {student_name}" if student_name and student_name != 'N/A' else ""
     if any(query_lower == g or query_lower.startswith(g + " ") for g in greeting_words):
         return {
-            "reply_text": f"Hello {student_name if student_name != 'N/A' else ''}! Welcome to *NRI University Admissions*. How can I assist you today? You can ask about our courses, fee structure, hostel facilities, or campus location.",
+            "reply_text": f"Hello{name_str}! Welcome to *NRI University*. Our admissions team will reach out to you shortly.",
             "source": "AI Admissions Assistant",
-            "buttons": ["Courses & Fees", "Hostel Facilities", "Contact Counselor"]
+            "buttons": []
         }
 
     # Friendly conversational fallback if query didn't match specific brochure excerpts
     if "hostel" in query_lower:
-        fallback_reply = "NRI University offers modern hostel accommodation with 24/7 security, dining, and Wi-Fi facilities for both boys and girls. Would you like an admissions counselor to call you with full hostel fee details?"
+        fallback_reply = "NRI University offers modern hostel accommodation with 24/7 security, dining, and Wi-Fi facilities for both boys and girls. Our team will contact you soon with full hostel details."
     elif "location" in query_lower or "where" in query_lower or "address" in query_lower or "map" in query_lower:
         fallback_reply = "NRI University (NRI Institute of Technology) is located at Pothavarappadu, Agiripalli Mandal, near Vijayawada, Andhra Pradesh. College buses are available across Vijayawada and nearby areas."
     elif "fee" in query_lower or "cost" in query_lower or "price" in query_lower:
-        fallback_reply = f"Our admissions team can provide the complete fee structure for *{selected_branch}*. Would you like a counselor to assist you directly?"
+        fallback_reply = f"Our admissions team will contact you soon with the complete fee structure details for *{selected_branch}*."
     else:
-        fallback_reply = "Thank you for reaching out to *NRI University Admissions*! Our counselors can provide full details regarding your inquiry. Would you like an outreach counselor to contact you?"
+        fallback_reply = "Thank you for reaching out to *NRI University*. Our admissions team will contact you soon regarding your inquiry."
 
     return {
         "reply_text": fallback_reply,
         "source": "AI Admissions Assistant",
-        "buttons": ["Contact Counselor"]
+        "buttons": []
     }
