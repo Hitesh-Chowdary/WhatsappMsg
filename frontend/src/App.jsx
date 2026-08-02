@@ -1357,14 +1357,15 @@ function App() {
     };
 
     const isSelectionChanged = isChatSelectionChangedRef.current;
+    const isForced = forceScrollRef.current;
     const container = chatContainerRef.current;
-    const threshold = 150;
+    const threshold = 250;
     const isNearBottom = container ? (container.scrollHeight - container.scrollTop - container.clientHeight) <= threshold : true;
 
-    if (isSelectionChanged || isNearBottom || forceChatScrollRef.current) {
+    if (isSelectionChanged || isNearBottom || isForced) {
       scrollToBottom();
       
-      // Retry multiple times to ensure scroll succeeds even if images, fonts, or flexbox layouts take time to compute heights
+      // Retry multiple times to ensure scroll succeeds even if images or layout calculations take time
       const t1 = setTimeout(scrollToBottom, 50);
       const t2 = setTimeout(scrollToBottom, 150);
       const t3 = setTimeout(scrollToBottom, 350);
@@ -1373,7 +1374,7 @@ function App() {
       if (isSelectionChanged) {
         isChatSelectionChangedRef.current = false;
       }
-      forceChatScrollRef.current = false;
+      forceScrollRef.current = false;
 
       return () => {
         clearTimeout(t1);
