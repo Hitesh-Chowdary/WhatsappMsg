@@ -2275,73 +2275,16 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
             "source_keyword": matched_rule.keyword
         }
 
-    # 5. Check AI Knowledge Base (Brochures & Crawled Website Pages)
-    # Skip AI brochure search for stop/closing words & counselor request phrases
+    # 5. Check for stop/closing words & counselor request phrases
     if normalized_text in ["stop", "bye", "cancel", "exit", "quit", "unsubscribe", "optout"]:
         return {
-            "reply_text": "Thank you! Feel free to reach out anytime if you need further assistance or information.",
-            "buttons": ["Main Menu"],
+            "reply_text": "Thank you! Feel free to reach out anytime if you need further assistance.",
+            "buttons": [],
             "media_url": None,
             "source_keyword": normalized_text
         }
 
-    if any(phrase in normalized_text for phrase in ["contact staff", "call staff", "ask counselor", "contact counselor", "call counselor", "talk to staff"]):
-        if record:
-            record.parent_response = "Counselor Needed"
-            vars_copy = dict(record.variables or {})
-            vars_copy["contact_requested"] = True
-            vars_copy["call_requested_by"] = requester_label
-            vars_copy["scheduled_call"] = f"[{requester_label}] Call Request: {message_text.strip()}"
-            record.variables = vars_copy
-        return {
-            "reply_text": "Thank you! Our counselor will reach you soon.",
-            "buttons": [],
-            "media_url": None,
-            "source_keyword": "contact_staff"
-        }
-
-    try:
-        brochure_stmt = select(BrochureDocument).where(BrochureDocument.is_active == True)
-        brochure_res = await db.execute(brochure_stmt)
-        active_brochures = brochure_res.scalars().all()
-
-        web_stmt = select(WebsiteKnowledge).where(WebsiteKnowledge.is_active == True)
-        web_res = await db.execute(web_stmt)
-        active_web_pages = web_res.scalars().all()
-
-        if active_brochures or active_web_pages:
-            from brochure_service import query_brochures
-            brochure_reply = await query_brochures(
-                query_text=message_text,
-                active_brochures=active_brochures,
-                website_pages=active_web_pages,
-                student_name=record.student_name if record else "Student",
-                parent_name=record.parent_name if record else "Parent",
-                selected_branch=record.selected_branch if record else "Program"
-            )
-            if brochure_reply:
-                if record:
-                    record.parent_response = "Counselor Needed"
-                    vars_copy = dict(record.variables or {})
-                    vars_copy["contact_requested"] = True
-                    vars_copy["call_requested_by"] = requester_label
-                    vars_copy["scheduled_call"] = f"[{requester_label}] Inquiry: {message_text.strip()}"
-                    record.variables = vars_copy
-
-                final_text = brochure_reply["reply_text"]
-                if "counselor" not in final_text.lower():
-                    final_text += "\n\n📌 Our counselor will reach you soon."
-
-                return {
-                    "reply_text": final_text,
-                    "buttons": [],
-                    "media_url": None,
-                    "source_keyword": "ai_knowledge_base"
-                }
-    except Exception as e:
-        logger.error(f"Error querying AI Knowledge Engine: {e}")
-
-    # 6. Default Fallback Rule or Friendly Counselor Handover Reply
+    # 6. Default Fallback Rule or Clean Counselor Handover Reply
     default_rule = next((r for r in all_rules if r.keyword == "default"), None)
     if default_rule:
         return {
@@ -2358,6 +2301,7 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         vars_copy["call_requested_by"] = requester_label
         vars_copy["scheduled_call"] = f"[{requester_label}] Inquiry: {message_text.strip()}"
         record.variables = vars_copy
+
     return {
         "reply_text": "Thank you for reaching out to NRI University. Our counselor will reach you soon.",
         "buttons": [],
@@ -3320,15 +3264,22 @@ async def update_counselor_status(
     if payload.counselor_status == 'completed':
         record.assigned_counselor_id = None
         record.assigned_counselor_name = None
+        record.parent_response = "Completed"
 
-        # Auto-complete all pending ScheduledReminder tasks for this candidate
-        from database import ScheduledReminder
+        # Clear scheduled call & contact requested variables
+        vars_copy = dict(record.variables or {})
+        vars_copy.pop("scheduled_call", None)
+        vars_copy.pop("contact_requested", None)
+        record.variables = vars_copy
+
+        # Auto-resolve all notes for this record so reminder badge drops to 0
+        from database import RecordNote
         from sqlalchemy import update as sql_update
-        rem_stmt = sql_update(ScheduledReminder).where(
-            ScheduledReminder.record_id == id,
-            ScheduledReminder.status == 'pending'
-        ).values(status='completed')
-        await db.execute(rem_stmt)
+        note_stmt = sql_update(RecordNote).where(
+            RecordNote.record_id == id,
+            RecordNote.resolved == False
+        ).values(resolved=True)
+        await db.execute(note_stmt)
 
         note = RecordNote(
             record_id=id,
