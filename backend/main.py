@@ -3720,6 +3720,7 @@ async def send_manual_chat_template(
     current_time_str = now_ist.strftime("%I:%M %p")
     current_date_str = now_ist.strftime("%Y-%m-%d")
 
+    record_vars = record.variables or {}
     fallback_vars = {
         "student_name": record.student_name,
         "parent_name": record.parent_name,
