@@ -4146,7 +4146,7 @@ function App() {
                             <div>
                               <h4 style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
                                 <span>🎓 {activeRecord ? activeRecord.student_name : 'Loading...'}</span>
-                                {activeRecord?.parent_name && (
+                                {activeRecord?.parent_name && activeRecord.parent_name !== 'N/A' && activeRecord.parent_name !== 'None' && activeRecord.parent_name !== 'Unknown Parent' && (
                                   <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--text-secondary)' }}>
                                     (Parent: 👨‍👩‍👧 {activeRecord.parent_name})
                                   </span>
@@ -5416,80 +5416,89 @@ function App() {
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>Student/Parent Details</th>
-                      <th>Phone Number</th>
-                      <th>Branch</th>
-                      <th>Scheduled Call Time</th>
+                      <th>Candidate Details</th>
+                      <th>Phone Numbers</th>
+                      <th>Branch & Stage</th>
+                      <th>Call Request & Initiator</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {reminders.map((rem) => {
-                      const initials = rem.student_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+                      const initials = (rem.student_name || 'ST').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+                      const parentDisplay = (rem.parent_name && rem.parent_name !== 'N/A' && rem.parent_name !== 'None' && rem.parent_name !== 'Unknown Parent')
+                        ? rem.parent_name
+                        : (rem.parent_phone_number ? `Phone: ${rem.parent_phone_number}` : 'Not Provided');
+                      
+                      const rawCallText = rem.scheduled_call || rem.variables?.scheduled_call || rem.parent_response || 'Counselor Callback Requested';
+                      const isParentRequested = rawCallText.includes('[Parent]') || rem.variables?.call_requested_by === 'Parent';
+                      const cleanCallText = rawCallText.replace(/\[(Parent|Student)\]\s*/g, '');
+
                       return (
                         <tr key={rem.id}>
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                              <div className="avatar-circle" style={{ width: '32px', height: '32px', fontSize: '0.75rem' }}>{initials}</div>
+                              <div className="avatar-circle" style={{ width: '36px', height: '36px', fontSize: '0.85rem' }}>{initials}</div>
                               <div>
-                                <span className="cell-title">{rem.student_name}</span>
-                                <span className="cell-subtitle" style={{ fontSize: '0.75rem' }}>Parent: {rem.parent_name}</span>
+                                <div style={{ fontWeight: '600', color: 'var(--text-main)' }}>{rem.student_name}</div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>👨‍👩‍👦 Parent: {parentDisplay}</div>
                               </div>
                             </div>
                           </td>
-                          <td style={{ fontWeight: '500' }}>{rem.phone_number}</td>
                           <td>
-                            <span className="badge badge-tag-contacted" style={{ fontSize: '0.75rem' }}>
-                              {rem.selected_branch}
-                            </span>
-                          </td>
-                          <td>
-                            <span className="badge" style={{ 
-                              fontSize: '0.8rem', 
-                              padding: '0.35rem 0.75rem', 
-                              backgroundColor: '#fffbeb', 
-                              color: '#b45309', 
-                              border: '1px solid #fde68a',
-                              borderRadius: '6px',
-                              fontWeight: '700',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.35rem'
-                            }}>
-                              📞 {rem.scheduled_call || rem.variables?.scheduled_call || rem.parent_response || 'Counselor Callback Requested'}
-                            </span>
-                          </td>
-                          <td>
-                            <div style={{ display: 'flex', gap: '0.5rem' }}>
-                              <button
-                                className="btn btn-primary btn-sm"
-                                onClick={() => {
-                                  // Open chat directly for this user
-                                  setActiveChatRecordId(rem.id);
-                                  fetchChatHistory(rem.id);
-                                  fetchChatNotes(rem.id);
-                                  setActiveChatSubTab('chat');
-                                  setMobileActiveSubView('thread');
-                                  setActiveView('chat');
-                                  setSelectedChatTemplate('');
-                                  setForceFreeForm(false);
-                                }}
-                              >
-                                Open Chat
-                              </button>
-                              <button
-                                className="btn btn-success btn-sm"
-                                onClick={() => handleUpdateTag(rem.id, 'Interested')}
-                              >
-                                Mark Interested
-                              </button>
-                              <button
-                                className="btn btn-danger btn-sm"
-                                onClick={() => handleUpdateTag(rem.id, 'Not Interested')}
-                              >
-                                Not Interested
-                              </button>
+                            <div style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                              <div><span style={{ fontWeight: '600' }}>Student:</span> {rem.phone_number}</div>
+                              {rem.parent_phone_number && (
+                                <div style={{ color: 'var(--text-muted)' }}><span style={{ fontWeight: '600' }}>Parent:</span> {rem.parent_phone_number}</div>
+                              )}
                             </div>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'flex-start' }}>
+                              <span className="badge badge-tag-contacted" style={{ fontSize: '0.75rem' }}>
+                                🎓 {rem.selected_branch || 'General'}
+                              </span>
+                              <span className="badge" style={{ fontSize: '0.7rem', backgroundColor: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' }}>
+                                {rem.counselor_status === 'completed' ? '🟢 Resolved' : (rem.parent_response || 'Pending')}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                              <span className="badge" style={{ 
+                                fontSize: '0.75rem', 
+                                padding: '0.2rem 0.5rem', 
+                                backgroundColor: isParentRequested ? '#fef3c7' : '#e0e7ff', 
+                                color: isParentRequested ? '#92400e' : '#3730a3', 
+                                border: isParentRequested ? '1px solid #fcd34d' : '1px solid #a5b4fc',
+                                borderRadius: '4px',
+                                fontWeight: '700',
+                                width: 'fit-content'
+                              }}>
+                                {isParentRequested ? '👨‍👩‍👦 Parent Requested Call' : '🎓 Student Requested Call'}
+                              </span>
+                              <span style={{ fontSize: '0.8rem', color: 'var(--text-main)', fontWeight: '500' }}>
+                                📞 {cleanCallText}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.4rem 0.85rem' }}
+                              onClick={() => {
+                                setActiveChatRecordId(rem.id);
+                                fetchChatHistory(rem.id);
+                                fetchChatNotes(rem.id);
+                                setActiveChatSubTab('chat');
+                                setMobileActiveSubView('thread');
+                                setActiveView('chat');
+                                setSelectedChatTemplate('');
+                                setForceFreeForm(false);
+                              }}
+                            >
+                              💬 Open Chat
+                            </button>
                           </td>
                         </tr>
                       );
@@ -5669,26 +5678,30 @@ function App() {
                                 <div className="kanban-card-avatar" style={{ backgroundColor: column.bg, color: column.color }}>{initials}</div>
                                 <span className="kanban-card-name">{contact.student_name}</span>
                               </div>
-                              <div className="kanban-card-details">
-                                {contact.parent_name && (
+                                <div className="kanban-card-details">
+                                  {contact.parent_name && contact.parent_name !== 'N/A' && contact.parent_name !== 'None' && contact.parent_name !== 'Unknown Parent' ? (
+                                    <div className="kanban-card-detail-item">
+                                      <span style={{ opacity: 0.6 }}>👪 Parent:</span> {contact.parent_name}
+                                    </div>
+                                  ) : (
+                                    <div className="kanban-card-detail-item">
+                                      <span style={{ opacity: 0.45, fontStyle: 'italic' }}>👪 Parent: Not Provided</span>
+                                    </div>
+                                  )}
                                   <div className="kanban-card-detail-item">
-                                    <span style={{ opacity: 0.6 }}>👪 Parent:</span> {contact.parent_name}
+                                    <span style={{ opacity: 0.6 }}>📱 Student:</span> +{contact.phone_number}
                                   </div>
-                                )}
-                                <div className="kanban-card-detail-item">
-                                  <span style={{ opacity: 0.6 }}>📱 Student:</span> +{contact.phone_number}
-                                </div>
-                                {contact.parent_phone_number && (
-                                  <div className="kanban-card-detail-item">
-                                    <span style={{ opacity: 0.6 }}>📱 Parent:</span> +{contact.parent_phone_number}
+                                  {contact.parent_phone_number && (
+                                    <div className="kanban-card-detail-item">
+                                      <span style={{ opacity: 0.6 }}>📱 Parent:</span> +{contact.parent_phone_number}
+                                    </div>
+                                  )}
+                                  <div className="kanban-card-detail-item" style={{ marginTop: '0.2rem' }}>
+                                    <span className="badge" style={{ fontSize: '0.7rem', backgroundColor: 'var(--color-blue-light)', color: 'var(--color-blue)', border: '1px solid var(--color-blue-border)', padding: '0.1rem 0.4rem' }}>
+                                      {contact.selected_branch}
+                                    </span>
                                   </div>
-                                )}
-                                <div className="kanban-card-detail-item" style={{ marginTop: '0.2rem' }}>
-                                  <span className="badge" style={{ fontSize: '0.7rem', backgroundColor: 'var(--color-blue-light)', color: 'var(--color-blue)', border: '1px solid var(--color-blue-border)', padding: '0.1rem 0.4rem' }}>
-                                    {contact.selected_branch}
-                                  </span>
                                 </div>
-                              </div>
                               <div className="kanban-card-actions">
                                 <button
                                   className="btn btn-secondary btn-sm"
@@ -5762,7 +5775,13 @@ function App() {
                                 <span className="cell-title" style={{ fontWeight: '600' }}>{contact.student_name}</span>
                               </div>
                             </td>
-                            <td>{contact.parent_name}</td>
+                            <td>
+                              {contact.parent_name && contact.parent_name !== 'N/A' && contact.parent_name !== 'None' && contact.parent_name !== 'Unknown Parent' ? (
+                                <span>{contact.parent_name}</span>
+                              ) : (
+                                <span style={{ opacity: 0.45, fontStyle: 'italic' }}>Not Provided</span>
+                              )}
+                            </td>
                             <td style={{ fontWeight: '500' }}>📱 +{contact.phone_number}</td>
                             <td style={{ fontWeight: '500' }}>
                               {contact.parent_phone_number ? (

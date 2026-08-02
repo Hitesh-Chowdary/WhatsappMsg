@@ -2255,7 +2255,8 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
             record.parent_response = "Counselor Needed"
             vars_copy = dict(record.variables or {})
             vars_copy["contact_requested"] = True
-            vars_copy["scheduled_call"] = f"Call Request: {message_text.strip()}"
+            vars_copy["call_requested_by"] = requester_label
+            vars_copy["scheduled_call"] = f"[{requester_label}] Call Request: {message_text.strip()}"
             record.variables = vars_copy
         return {
             "reply_text": "Thank you! Our admissions team has been notified, and an outreach counselor will assist you here shortly.",
@@ -2284,9 +2285,21 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
                 selected_branch=record.selected_branch if record else "Program"
             )
             if brochure_reply:
+                if record:
+                    record.parent_response = "Counselor Needed"
+                    vars_copy = dict(record.variables or {})
+                    vars_copy["contact_requested"] = True
+                    vars_copy["call_requested_by"] = requester_label
+                    vars_copy["scheduled_call"] = f"[{requester_label}] Inquiry: {message_text.strip()}"
+                    record.variables = vars_copy
+
+                final_text = brochure_reply["reply_text"]
+                if "counselor" not in final_text.lower():
+                    final_text += "\n\n📌 Our admissions counselor has been notified and will reach out to you shortly to assist with any further details!"
+
                 return {
-                    "reply_text": brochure_reply["reply_text"],
-                    "buttons": brochure_reply.get("buttons", []),
+                    "reply_text": final_text,
+                    "buttons": [],
                     "media_url": None,
                     "source_keyword": "ai_knowledge_base"
                 }
@@ -2307,11 +2320,12 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         record.parent_response = "Counselor Needed"
         vars_copy = dict(record.variables or {})
         vars_copy["contact_requested"] = True
-        vars_copy["scheduled_call"] = f"Inquiry: {message_text.strip()}"
+        vars_copy["call_requested_by"] = requester_label
+        vars_copy["scheduled_call"] = f"[{requester_label}] Inquiry: {message_text.strip()}"
         record.variables = vars_copy
     return {
-        "reply_text": f"Thank you for your inquiry regarding *{message_text.strip()}*! Our admissions team has been notified, and an outreach counselor will assist you here shortly.",
-        "buttons": ["Ask Counselor"],
+        "reply_text": f"Thank you for your inquiry regarding *{message_text.strip()}*! Our admissions counselor has been notified and will reach out to assist you shortly.",
+        "buttons": [],
         "media_url": None,
         "source_keyword": "unhandled_inquiry"
     }
@@ -2486,7 +2500,7 @@ async def handle_incoming_text_reply(
         await db.commit()
         return {"status": "success", "record_id": record.id}
         
-    response_data = await get_bot_response(message_text, db, record, template_name=record.sent_template)
+    response_data = await get_bot_response(message_text, db, record, template_name=record.sent_template, sender=sender)
         
     # Check if this is a default/fallback message (to prevent loop spam)
     if response_data and response_data.get("source_keyword") in ["default", "fallback"]:
