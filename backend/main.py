@@ -2294,7 +2294,7 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
             vars_copy["scheduled_call"] = f"[{requester_label}] Call Request: {message_text.strip()}"
             record.variables = vars_copy
         return {
-            "reply_text": "Thank you! Our admissions team has been notified, and an outreach counselor will assist you here shortly.",
+            "reply_text": "Thank you! Our counselor will reach you soon.",
             "buttons": [],
             "media_url": None,
             "source_keyword": "contact_staff"
@@ -2330,7 +2330,7 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
 
                 final_text = brochure_reply["reply_text"]
                 if "counselor" not in final_text.lower():
-                    final_text += "\n\n📌 Our admissions counselor has been notified and will reach out to you shortly to assist with any further details!"
+                    final_text += "\n\n📌 Our counselor will reach you soon."
 
                 return {
                     "reply_text": final_text,
@@ -2359,7 +2359,7 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         vars_copy["scheduled_call"] = f"[{requester_label}] Inquiry: {message_text.strip()}"
         record.variables = vars_copy
     return {
-        "reply_text": f"Thank you for your inquiry regarding *{message_text.strip()}*! Our admissions counselor has been notified and will reach out to assist you shortly.",
+        "reply_text": "Thank you for reaching out to NRI University. Our counselor will reach you soon.",
         "buttons": [],
         "media_url": None,
         "source_keyword": "unhandled_inquiry"

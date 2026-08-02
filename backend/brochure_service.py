@@ -220,23 +220,23 @@ Guidelines:
     name_str = f" {student_name}" if student_name and student_name != 'N/A' else ""
     if any(query_lower == g or query_lower.startswith(g + " ") for g in greeting_words):
         return {
-            "reply_text": f"Hello{name_str}! Welcome to *NRI University*. Our admissions team will reach out to you shortly.",
-            "source": "AI Admissions Assistant",
+            "reply_text": f"Hello{name_str}! Welcome to *NRI University*. Our counselor will reach you soon.",
+            "source": "AI Assistant",
             "buttons": []
         }
 
     # Friendly conversational fallback if query didn't match specific brochure excerpts
     if "hostel" in query_lower:
-        fallback_reply = "NRI University offers modern hostel accommodation with 24/7 security, dining, and Wi-Fi facilities for both boys and girls. Our team will contact you soon with full hostel details."
+        fallback_reply = "NRI University offers modern hostel accommodation with 24/7 security, dining, and Wi-Fi facilities for both boys and girls. Our counselor will reach you soon with full details."
     elif "location" in query_lower or "where" in query_lower or "address" in query_lower or "map" in query_lower:
         fallback_reply = "NRI University (NRI Institute of Technology) is located at Pothavarappadu, Agiripalli Mandal, near Vijayawada, Andhra Pradesh. College buses are available across Vijayawada and nearby areas."
     elif "fee" in query_lower or "cost" in query_lower or "price" in query_lower:
-        fallback_reply = f"Our admissions team will contact you soon with the complete fee structure details for *{selected_branch}*."
+        fallback_reply = f"Our counselor will reach you soon with the fee details for *{selected_branch}*."
     else:
-        fallback_reply = "Thank you for reaching out to *NRI University*. Our admissions team will contact you soon regarding your inquiry."
+        fallback_reply = "Thank you for reaching out to *NRI University*. Our counselor will reach you soon."
 
     return {
         "reply_text": fallback_reply,
-        "source": "AI Admissions Assistant",
+        "source": "AI Assistant",
         "buttons": []
     }
