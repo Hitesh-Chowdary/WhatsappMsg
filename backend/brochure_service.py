@@ -214,14 +214,25 @@ Guidelines:
             "buttons": []
         }
 
+    # 0. Check for casual greetings / small talk first
+    query_lower = query_text.lower().strip()
+    greeting_words = ["hello", "hi", "hey", "hlo", "good morning", "good afternoon", "good evening", "namaste", "start", "menu", "greetings"]
+    if any(query_lower == g or query_lower.startswith(g + " ") for g in greeting_words):
+        return {
+            "reply_text": f"Hello {student_name if student_name != 'N/A' else ''}! Welcome to *NRI University Admissions*. How can I assist you today? You can ask about our courses, fee structure, hostel facilities, or campus location.",
+            "source": "AI Admissions Assistant",
+            "buttons": ["Courses & Fees", "Hostel Facilities", "Contact Counselor"]
+        }
+
     # Friendly conversational fallback if query didn't match specific brochure excerpts
-    query_lower = query_text.lower()
     if "hostel" in query_lower:
         fallback_reply = "NRI University offers modern hostel accommodation with 24/7 security, dining, and Wi-Fi facilities for both boys and girls. Would you like an admissions counselor to call you with full hostel fee details?"
-    elif "location" in query_lower or "where" in query_lower or "address" in query_lower:
-        fallback_reply = "NRI University is located at Pothavarappadu, Agiripalli Mandal, near Vijayawada, Andhra Pradesh. College buses are available across Vijayawada and nearby areas."
+    elif "location" in query_lower or "where" in query_lower or "address" in query_lower or "map" in query_lower:
+        fallback_reply = "NRI University (NRI Institute of Technology) is located at Pothavarappadu, Agiripalli Mandal, near Vijayawada, Andhra Pradesh. College buses are available across Vijayawada and nearby areas."
+    elif "fee" in query_lower or "cost" in query_lower or "price" in query_lower:
+        fallback_reply = f"Our admissions team can provide the complete fee structure for *{selected_branch}*. Would you like a counselor to assist you directly?"
     else:
-        fallback_reply = f"Thank you for asking about *{query_text.strip()}*! Our admissions team can provide full details. Would you like a counselor to contact you?"
+        fallback_reply = "Thank you for reaching out to *NRI University Admissions*! Our counselors can provide full details regarding your inquiry. Would you like an outreach counselor to contact you?"
 
     return {
         "reply_text": fallback_reply,

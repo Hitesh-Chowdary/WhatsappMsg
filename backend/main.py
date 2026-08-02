@@ -2515,6 +2515,10 @@ async def handle_incoming_text_reply(
     # If candidate's past query was completed, reopen it to pending on new incoming message
     if record.counselor_status == 'completed':
         record.counselor_status = 'pending'
+        record.parent_response = 'No Response'
+        vars_copy = dict(record.variables or {})
+        vars_copy.pop("active_flow_id", None)
+        record.variables = vars_copy
         logger.info(f"Reopened record {record.id} from completed to pending due to new incoming message.")
 
     # Increment unread count ONLY for real typed messages, NOT button/interactive clicks
@@ -3316,6 +3320,16 @@ async def update_counselor_status(
     if payload.counselor_status == 'completed':
         record.assigned_counselor_id = None
         record.assigned_counselor_name = None
+
+        # Auto-complete all pending ScheduledReminder tasks for this candidate
+        from database import ScheduledReminder
+        from sqlalchemy import update as sql_update
+        rem_stmt = sql_update(ScheduledReminder).where(
+            ScheduledReminder.record_id == id,
+            ScheduledReminder.status == 'pending'
+        ).values(status='completed')
+        await db.execute(rem_stmt)
+
         note = RecordNote(
             record_id=id,
             note_text=f"✅ Query marked as Completed (Resolved) by Counselor {current_user.full_name or current_user.username}. Lead unassigned and slot freed up for future queries.",
