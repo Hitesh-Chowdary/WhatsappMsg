@@ -2455,6 +2455,7 @@ async def handle_incoming_text_reply(
         recipient_type=sender
     )
     db.add(chat_msg)
+    await db.flush() # Ensure incoming message gets ID and timestamp before any auto-reply is generated
     
     # If candidate's past query was completed, reopen it to pending on new incoming message
     if record.counselor_status == 'completed':
@@ -3608,7 +3609,7 @@ async def get_chat_history(
 ):
     """Retrieves full conversation message history and session status for a specific candidate."""
     from datetime import timedelta
-    stmt = select(ChatMessage).where(ChatMessage.record_id == record_id).order_by(ChatMessage.created_at.asc())
+    stmt = select(ChatMessage).where(ChatMessage.record_id == record_id).order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
     res = await db.execute(stmt)
     messages = res.scalars().all()
     

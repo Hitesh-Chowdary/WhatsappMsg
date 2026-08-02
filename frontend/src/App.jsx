@@ -903,8 +903,14 @@ function App() {
     try {
       const res = await authFetch(`${API_BASE}/api/v1/chat/history/${recordId}`);
       if (res.ok) {
-        const data = await res.json();
-        setChatHistory(data.messages || []);
+        const rawMsgs = data.messages || [];
+        const sortedMsgs = [...rawMsgs].sort((a, b) => {
+          const tA = new Date(a.created_at).getTime();
+          const tB = new Date(b.created_at).getTime();
+          if (tA !== tB) return tA - tB;
+          return (a.id || 0) - (b.id || 0);
+        });
+        setChatHistory(sortedMsgs);
         setChatSession(data.session || { active: false, expires_at: null, time_remaining_seconds: 0 });
         // Clear unread count for this record instantly in the local chatsList state
         setChatsList(prev => prev.map(c => 
