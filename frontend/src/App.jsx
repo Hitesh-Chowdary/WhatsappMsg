@@ -1305,6 +1305,7 @@ function App() {
     pollingStateRef.current = { currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter };
   }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter]);
 
+  const forceChatScrollRef = useRef(false);
   const prevChatHistoryLengthRef = useRef(0);
 
   // Auto-scroll to the bottom of chat messages intelligently (always scrolls on initial open / history load)
