@@ -606,7 +606,7 @@ function App() {
   const [chatStatusFilter, setChatStatusFilter] = useState('all');
   const [typedMessage, setTypedMessage] = useState('');
   const [activeChatSubTab, setActiveChatSubTab] = useState('chat');
-  const [chatThreadFilter, setChatThreadFilter] = useState('all'); // 'all', 'parent', 'student'
+  const [chatThreadFilter, setChatThreadFilter] = useState('parent'); // 'parent', 'student'
   const [selectedChatTemplate, setSelectedChatTemplate] = useState('');
   const [forceFreeForm, setForceFreeForm] = useState(false);
   const [sendingChat, setSendingChat] = useState(false);
@@ -4303,13 +4303,12 @@ function App() {
                         fontSize: '0.85rem',
                         fontWeight: '600',
                         color: activeChatSubTab === 'chat' ? 'var(--color-blue)' : 'var(--color-text-muted)',
-                        borderBottom: activeChatSubTab === 'chat' ? '2px solid var(--color-blue)' : 'none',
+                        border: 'none',
+                        borderBottom: activeChatSubTab === 'chat' ? '2px solid var(--color-blue)' : '2px solid transparent',
                         background: 'transparent',
+                        outline: 'none',
                         cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        borderTop: 'none',
-                        borderLeft: 'none',
-                        borderRight: 'none'
+                        transition: 'all 0.2s'
                       }}
                     >
                       💬 Chat History
@@ -4322,8 +4321,10 @@ function App() {
                         fontSize: '0.85rem',
                         fontWeight: '600',
                         color: activeChatSubTab === 'notes' ? 'var(--color-blue)' : 'var(--color-text-muted)',
-                        borderBottom: activeChatSubTab === 'notes' ? '2px solid var(--color-blue)' : 'none',
+                        border: 'none',
+                        borderBottom: activeChatSubTab === 'notes' ? '2px solid var(--color-blue)' : '2px solid transparent',
                         background: 'transparent',
+                        outline: 'none',
                         cursor: 'pointer',
                         transition: 'all 0.2s'
                       }}
@@ -4335,52 +4336,46 @@ function App() {
                   {activeChatSubTab === 'chat' ? (
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 1rem', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', fontSize: '0.78rem' }}>
-                        <span style={{ fontWeight: 600, color: '#64748b' }}>Thread Filter:</span>
-                        <div style={{ display: 'flex', gap: '0.3rem' }}>
+                        <span style={{ fontWeight: 600, color: '#64748b' }}>Active Chat Thread:</span>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
                           <button
                             type="button"
-                            onClick={() => setChatThreadFilter('all')}
-                            style={{
-                              padding: '0.2rem 0.6rem',
-                              borderRadius: '12px',
-                              fontSize: '0.72rem',
-                              fontWeight: 600,
-                              border: 'none',
-                              cursor: 'pointer',
-                              background: chatThreadFilter === 'all' ? '#2563eb' : '#e2e8f0',
-                              color: chatThreadFilter === 'all' ? '#ffffff' : '#475569'
+                            onClick={() => {
+                              setChatThreadFilter('parent');
+                              setChatRecipient('parent');
                             }}
-                          >
-                            Unified Thread
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setChatThreadFilter('parent')}
                             style={{
-                              padding: '0.2rem 0.6rem',
-                              borderRadius: '12px',
-                              fontSize: '0.72rem',
+                              padding: '0.3rem 0.8rem',
+                              borderRadius: '14px',
+                              fontSize: '0.76rem',
                               fontWeight: 600,
                               border: 'none',
+                              outline: 'none',
                               cursor: 'pointer',
                               background: chatThreadFilter === 'parent' ? '#2563eb' : '#e2e8f0',
-                              color: chatThreadFilter === 'parent' ? '#ffffff' : '#475569'
+                              color: chatThreadFilter === 'parent' ? '#ffffff' : '#475569',
+                              transition: 'all 0.15s ease'
                             }}
                           >
                             👨‍👩‍👦 Parent Chat
                           </button>
                           <button
                             type="button"
-                            onClick={() => setChatThreadFilter('student')}
+                            onClick={() => {
+                              setChatThreadFilter('student');
+                              setChatRecipient('student');
+                            }}
                             style={{
-                              padding: '0.2rem 0.6rem',
-                              borderRadius: '12px',
-                              fontSize: '0.72rem',
+                              padding: '0.3rem 0.8rem',
+                              borderRadius: '14px',
+                              fontSize: '0.76rem',
                               fontWeight: 600,
                               border: 'none',
+                              outline: 'none',
                               cursor: 'pointer',
                               background: chatThreadFilter === 'student' ? '#2563eb' : '#e2e8f0',
-                              color: chatThreadFilter === 'student' ? '#ffffff' : '#475569'
+                              color: chatThreadFilter === 'student' ? '#ffffff' : '#475569',
+                              transition: 'all 0.15s ease'
                             }}
                           >
                             🎓 Student Chat
@@ -4465,50 +4460,6 @@ function App() {
                         <div ref={chatBottomRef} style={{ height: 0 }} />
                       </div>
                       <div className="chat-input-area" style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '1rem', borderTop: '1px solid var(--border-color)', backgroundColor: '#ffffff' }}>
-                        {/* Recipient Number Target Toggle */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid #f1f5f9', paddingBottom: '8px', marginBottom: '4px' }}>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Send To:</span>
-                          <div style={{ display: 'flex', gap: '4px', background: '#f1f5f9', padding: '2px', borderRadius: '6px' }}>
-                            <button
-                              type="button"
-                              onClick={() => setChatRecipient('parent')}
-                              style={{
-                                border: 'none',
-                                outline: 'none',
-                                fontSize: '0.72rem',
-                                fontWeight: 600,
-                                padding: '4px 12px',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                transition: 'all 0.15s ease',
-                                background: chatRecipient === 'parent' ? '#ffffff' : 'transparent',
-                                color: chatRecipient === 'parent' ? 'var(--color-blue)' : 'var(--color-text-muted)',
-                                boxShadow: chatRecipient === 'parent' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-                              }}
-                            >
-                              Parent
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setChatRecipient('student')}
-                              style={{
-                                border: 'none',
-                                outline: 'none',
-                                fontSize: '0.72rem',
-                                fontWeight: 600,
-                                padding: '4px 12px',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                transition: 'all 0.15s ease',
-                                background: chatRecipient === 'student' ? '#ffffff' : 'transparent',
-                                color: chatRecipient === 'student' ? 'var(--color-blue)' : 'var(--color-text-muted)',
-                                boxShadow: chatRecipient === 'student' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-                              }}
-                            >
-                              Student
-                            </button>
-                          </div>
-                        </div>
                         {!chatSession.active ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
                             <div style={{ fontSize: '0.75rem', color: 'var(--color-amber)', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>

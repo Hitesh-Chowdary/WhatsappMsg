@@ -311,20 +311,41 @@ class MetaWhatsAppClient(WhatsAppClient):
                         elif norm_var in ["selectedbranch", "branch", "course", "selectedcourse", "status", "admissionstatus", "dept", "department"]:
                             val = template_variables.get("selected_branch") or template_variables.get("branch") or template_variables.get("status") or template_variables.get("dept") or template_variables.get("department")
                 
+                # Handle 00:00:00 string or missing date_time variables
+                if val is not None and "00:00:00" in str(val):
+                    from datetime import datetime
+                    import pytz
+                    try:
+                        ist = pytz.timezone("Asia/Kolkata")
+                        live_time = datetime.now(ist).strftime("%I:%M %p")
+                    except Exception:
+                        live_time = datetime.now().strftime("%I:%M %p")
+                    val = str(val).replace("00:00:00", live_time)
+
                 # If still None, check positional indices or fall back to default string
-                if val is None:
-                    if is_positional and var_name.isdigit():
+                if val is None or str(val).strip() in ["", "None", "null"]:
+                    from datetime import datetime
+                    import pytz
+                    try:
+                        ist = pytz.timezone("Asia/Kolkata")
+                        live_time = datetime.now(ist).strftime("%I:%M %p")
+                    except Exception:
+                        live_time = datetime.now().strftime("%I:%M %p")
+                        
+                    norm_var = var_name.lower().replace("_", "").replace(" ", "")
+                    if any(t in norm_var for t in ["time", "datetime"]):
+                        val = live_time
+                    elif is_positional and var_name.isdigit():
                         idx = int(var_name)
                         if idx == 1:
                             val = template_variables.get("parent_name") or template_variables.get("parent") or template_variables.get("student_name") or template_variables.get("student") or "Parent"
                         elif idx == 2:
                             val = template_variables.get("student_name") or template_variables.get("student") or template_variables.get("selected_branch") or template_variables.get("branch") or "Student"
                         elif idx == 3:
-                            val = template_variables.get("selected_branch") or template_variables.get("branch") or "Selected"
+                            val = template_variables.get("selected_branch") or template_variables.get("branch") or live_time
                         else:
                             val = ""
                     else:
-                        norm_var = var_name.lower().replace("_", "").replace(" ", "")
                         if "student" in norm_var:
                             val = "Student"
                         elif "parent" in norm_var:

@@ -3709,7 +3709,17 @@ async def send_manual_chat_template(
         raise HTTPException(status_code=404, detail="Template not found.")
 
     msg_body = template.template_text
-    record_vars = record.variables or {}
+    from datetime import datetime
+    import pytz
+    try:
+        ist = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.now(ist)
+    except Exception:
+        now_ist = datetime.now()
+        
+    current_time_str = now_ist.strftime("%I:%M %p")
+    current_date_str = now_ist.strftime("%Y-%m-%d")
+
     fallback_vars = {
         "student_name": record.student_name,
         "parent_name": record.parent_name,
@@ -3718,8 +3728,17 @@ async def send_manual_chat_template(
         "parent": record.parent_name,
         "branch": record.selected_branch,
         "status": record.selected_branch,
+        "time": current_time_str,
+        "date": current_date_str,
+        "date_time": f"{current_date_str} {current_time_str}",
+        "datetime": f"{current_date_str} {current_time_str}",
     }
     merged_vars = {**fallback_vars, **record_vars}
+    
+    # Replace any hardcoded 00:00:00 string inside record_vars if present
+    for k, v in list(merged_vars.items()):
+        if isinstance(v, str) and "00:00:00" in v:
+            merged_vars[k] = v.replace("00:00:00", current_time_str)
 
     msg_body = resolve_template_text(msg_body, record, merged_vars)
 
