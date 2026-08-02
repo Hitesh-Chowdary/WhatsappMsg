@@ -1306,11 +1306,16 @@ function App() {
   }, [currentPage, dispatchFilter, deliveryFilter, readFilter, responseFilter, search, branchFilter, templateFilter, selectedTemplateName, pipelineTagFilter, pendingNotesFilter]);
 
   const forceChatScrollRef = useRef(false);
-  const prevChatHistoryLengthRef = useRef(0);
+  const isChatSelectionChangedRef = useRef(true);
 
-  // Auto-scroll to the bottom of chat messages intelligently (always scrolls on initial open / history load)
+  // Mark chat selection as changed whenever activeChatRecordId, chatThreadFilter, or activeChatSubTab changes
   useEffect(() => {
-    if (!activeChatRecordId) return;
+    isChatSelectionChangedRef.current = true;
+  }, [activeChatRecordId, chatThreadFilter, activeChatSubTab]);
+
+  // Auto-scroll to the bottom of chat messages
+  useEffect(() => {
+    if (!activeChatRecordId || activeChatSubTab !== 'chat') return;
 
     const scrollToBottom = () => {
       const container = chatContainerRef.current;
@@ -1322,24 +1327,30 @@ function App() {
       }
     };
 
-    const isNewChat = prevActiveChatRecordIdRef.current !== activeChatRecordId;
-    const historyJustLoaded = prevChatHistoryLengthRef.current === 0 && chatHistory.length > 0;
-    
-    prevActiveChatRecordIdRef.current = activeChatRecordId;
-    prevChatHistoryLengthRef.current = chatHistory.length;
-
+    const isSelectionChanged = isChatSelectionChangedRef.current;
     const container = chatContainerRef.current;
     const threshold = 150;
     const isNearBottom = container ? (container.scrollHeight - container.scrollTop - container.clientHeight) <= threshold : true;
 
-    if (isNewChat || historyJustLoaded || isNearBottom || forceChatScrollRef.current) {
+    if (isSelectionChanged || isNearBottom || forceChatScrollRef.current) {
       scrollToBottom();
-      const timer1 = setTimeout(scrollToBottom, 50);
-      const timer2 = setTimeout(scrollToBottom, 200);
+      
+      // Retry multiple times to ensure scroll succeeds even if images, fonts, or flexbox layouts take time to compute heights
+      const t1 = setTimeout(scrollToBottom, 50);
+      const t2 = setTimeout(scrollToBottom, 150);
+      const t3 = setTimeout(scrollToBottom, 350);
+      const t4 = setTimeout(scrollToBottom, 600);
+
+      if (isSelectionChanged) {
+        isChatSelectionChangedRef.current = false;
+      }
       forceChatScrollRef.current = false;
+
       return () => {
-        clearTimeout(timer1);
-        clearTimeout(timer2);
+        clearTimeout(t1);
+        clearTimeout(t2);
+        clearTimeout(t3);
+        clearTimeout(t4);
       };
     }
   }, [chatHistory, activeChatRecordId, chatThreadFilter, activeChatSubTab]);
