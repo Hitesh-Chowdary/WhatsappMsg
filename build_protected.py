@@ -27,6 +27,7 @@ def main():
         ".dockerignore",
         ".env.example",
         "requirements.txt",
+        "run_production.bat",
         "start.bat",
         "reset_password.py",
         "README.md"
