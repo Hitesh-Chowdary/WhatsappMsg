@@ -401,6 +401,10 @@ function App() {
       triggerToast("Please select a brochure document file (PDF or TXT).", "warning");
       return;
     }
+    if (selectedBrochureFile.size > 10 * 1024 * 1024) {
+      triggerToast("File size exceeds 10 MB limit. Please upload a smaller document.", "error");
+      return;
+    }
     setUploadingBrochure(true);
     const formData = new FormData();
     formData.append("file", selectedBrochureFile);
@@ -415,7 +419,12 @@ function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to upload brochure.");
-      triggerToast("Brochure uploaded & indexed for AI Chatbot successfully!", "success");
+      
+      if (data.brochure?.warning) {
+        triggerToast(data.brochure.warning, "warning");
+      } else {
+        triggerToast("Brochure uploaded & indexed for AI Chatbot successfully!", "success");
+      }
       setBrochureTitle('');
       setSelectedBrochureFile(null);
       fetchBrochures();
@@ -1312,6 +1321,28 @@ function App() {
   useEffect(() => {
     isChatSelectionChangedRef.current = true;
   }, [activeChatRecordId, chatThreadFilter, activeChatSubTab]);
+
+  // Dynamically default recipient type and thread filter based on phone number registration
+  useEffect(() => {
+    if (!activeChatRecordId) {
+      prevActiveChatRecordIdRef.current = null;
+      return;
+    }
+    if (prevActiveChatRecordIdRef.current !== activeChatRecordId) {
+      const activeRec = chatsList.find(c => c.record.id === activeChatRecordId)?.record 
+                      || contactsList.find(c => c.id === activeChatRecordId);
+      if (activeRec) {
+        prevActiveChatRecordIdRef.current = activeChatRecordId;
+        if (!activeRec.parent_phone_number || activeRec.parent_phone_number.trim() === '') {
+          setChatThreadFilter('student');
+          setChatRecipient('student');
+        } else {
+          setChatThreadFilter('parent');
+          setChatRecipient('parent');
+        }
+      }
+    }
+  }, [activeChatRecordId, chatsList, contactsList]);
 
   // Auto-scroll to the bottom of chat messages
   useEffect(() => {
@@ -4159,25 +4190,45 @@ function App() {
                               </h4>
                               {activeRecord && (
                                 <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.8rem', marginTop: '0.45rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                                  <span style={{ 
-                                    padding: '0.15rem 0.5rem', 
-                                    borderRadius: '4px', 
-                                    backgroundColor: chatRecipient === 'student' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(0, 0, 0, 0.04)',
-                                    border: chatRecipient === 'student' ? '1px solid var(--color-blue-border)' : '1px solid transparent',
-                                    color: chatRecipient === 'student' ? 'var(--color-blue)' : 'var(--text-secondary)',
-                                    fontWeight: chatRecipient === 'student' ? '700' : '500'
-                                  }}>
+                                  <span 
+                                    onClick={() => {
+                                      setChatThreadFilter('student');
+                                      setChatRecipient('student');
+                                    }}
+                                    style={{ 
+                                      padding: '0.15rem 0.5rem', 
+                                      borderRadius: '4px', 
+                                      backgroundColor: chatRecipient === 'student' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(0, 0, 0, 0.04)',
+                                      border: chatRecipient === 'student' ? '1px solid var(--color-blue-border)' : '1px solid transparent',
+                                      color: chatRecipient === 'student' ? 'var(--color-blue)' : 'var(--text-secondary)',
+                                      fontWeight: chatRecipient === 'student' ? '700' : '500',
+                                      cursor: 'pointer',
+                                      userSelect: 'none'
+                                    }}
+                                    title="Click to switch to Student Chat"
+                                  >
                                     📱 Student: <strong>+{activeRecord.phone_number}</strong>
                                   </span>
 
-                                  <span style={{ 
-                                    padding: '0.15rem 0.5rem', 
-                                    borderRadius: '4px', 
-                                    backgroundColor: chatRecipient === 'parent' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(0, 0, 0, 0.04)',
-                                    border: chatRecipient === 'parent' ? '1px solid var(--color-blue-border)' : '1px solid transparent',
-                                    color: chatRecipient === 'parent' ? 'var(--color-blue)' : 'var(--text-secondary)',
-                                    fontWeight: chatRecipient === 'parent' ? '700' : '500'
-                                  }}>
+                                  <span 
+                                    onClick={() => {
+                                      if (activeRecord.parent_phone_number) {
+                                        setChatThreadFilter('parent');
+                                        setChatRecipient('parent');
+                                      }
+                                    }}
+                                    style={{ 
+                                      padding: '0.15rem 0.5rem', 
+                                      borderRadius: '4px', 
+                                      backgroundColor: chatRecipient === 'parent' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(0, 0, 0, 0.04)',
+                                      border: chatRecipient === 'parent' ? '1px solid var(--color-blue-border)' : '1px solid transparent',
+                                      color: chatRecipient === 'parent' ? 'var(--color-blue)' : 'var(--text-secondary)',
+                                      fontWeight: chatRecipient === 'parent' ? '700' : '500',
+                                      cursor: activeRecord.parent_phone_number ? 'pointer' : 'not-allowed',
+                                      userSelect: 'none'
+                                    }}
+                                    title={activeRecord.parent_phone_number ? "Click to switch to Parent Chat" : "Parent number not registered"}
+                                  >
                                     📱 Parent: {activeRecord.parent_phone_number ? <strong>+{activeRecord.parent_phone_number}</strong> : <em style={{ opacity: 0.6 }}>Not Registered</em>}
                                   </span>
                                 </div>

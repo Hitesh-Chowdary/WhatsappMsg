@@ -2108,12 +2108,13 @@ def match_keyword(keyword: str, text: str) -> bool:
     return False
 
 # Helper to process incoming text replies and trigger auto-responder
-async def get_bot_response(message_text: str, db: AsyncSession, record: Record, template_name: Optional[str] = None) -> Optional[dict]:
+async def get_bot_response(message_text: str, db: AsyncSession, record: Record, template_name: Optional[str] = None, sender: str = "student") -> Optional[dict]:
     """
     Checks if there is an active BotFlow and traverses it to find a matching response.
     Falls back to AutoReplyRules if no active BotFlow exists or no match is found in the flow.
     """
     normalized_text = message_text.lower().strip()
+    requester_label = "Parent" if sender == "parent" else "Student"
     
     current_vars = record.variables or {}
     active_flow_id = current_vars.get("active_flow_id")
@@ -4000,12 +4001,18 @@ async def upload_brochure_document(
     if ext not in [".pdf", ".txt", ".md"]:
         raise HTTPException(status_code=400, detail="Only PDF, TXT, or MD documents are supported.")
 
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="File size exceeds maximum limit of 10 MB. Please upload a smaller document."
+        )
+
     import uuid
     saved_filename = f"{uuid.uuid4().hex}_{file.filename}"
     saved_path = os.path.join(BROCHURES_DIR, saved_filename)
 
     with open(saved_path, "wb") as buffer:
-        content = await file.read()
         buffer.write(content)
 
     from brochure_service import extract_text_from_file
@@ -4018,6 +4025,7 @@ async def upload_brochure_document(
         )
 
     doc_title = title if title and title.strip() else os.path.splitext(file.filename)[0]
+    is_scanned_warning = len(extracted_text.strip()) < 100
 
     brochure = BrochureDocument(
         title=doc_title,
@@ -4030,7 +4038,11 @@ async def upload_brochure_document(
     await db.commit()
     await db.refresh(brochure)
 
-    return {"status": "success", "brochure": brochure.to_dict()}
+    res_data = brochure.to_dict()
+    if is_scanned_warning:
+        res_data["warning"] = "Warning: This PDF contains very little extractable text (<100 chars). It may be a scanned image-only PDF."
+
+    return {"status": "success", "brochure": res_data}
 
 @app.patch("/api/v1/brochures/{brochure_id}/toggle")
 async def toggle_brochure_status(
@@ -4094,7 +4106,8 @@ async def crawl_website_endpoint(
 ):
     """Crawls an institutional website domain and indexes all internal pages into the AI Knowledge Base."""
     from crawler_service import crawl_website
-    crawl_result = await crawl_website(root_url=payload.url, max_pages=payload.max_pages or 25)
+    max_pages = min(payload.max_pages or 10, 15)
+    crawl_result = await crawl_website(root_url=payload.url, max_pages=max_pages)
 
     crawled_pages = crawl_result.get("pages", [])
     if not crawled_pages:
