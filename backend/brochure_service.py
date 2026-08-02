@@ -160,31 +160,27 @@ Guidelines:
 
         cleaned_doc_text = re.sub(r'(?i)skip to content\s*', '', doc_text or '')
         cleaned_doc_text = re.sub(r'(?i)public self disclosure\s*', '', cleaned_doc_text)
+        cleaned_doc_text = re.sub(r'\s+', ' ', cleaned_doc_text)  # Normalize multiple spaces/newlines
 
         title_score = sum(5 for kw in keywords if kw in doc_title_lower)
 
-        # Merge newlines inside paragraphs to form complete sentences
-        raw_paras = [p.strip() for p in re.split(r'\n\s*\n', cleaned_doc_text) if len(p.strip()) > 10]
-        if not raw_paras:
-            raw_paras = [p.strip() for p in re.split(r'[\n\r]+', cleaned_doc_text) if len(p.strip()) > 10]
+        # Split text into clean individual sentences
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', cleaned_doc_text) if len(s.strip()) > 15]
 
-        for p in raw_paras:
-            p_clean = clean_sentence_fragment(p)
-            if len(p_clean) < 15:
+        for sentence in sentences:
+            s_clean = clean_sentence_fragment(sentence)
+            if len(s_clean) < 15 or len(s_clean) > 300:  # Ignore giant raw page dumps
                 continue
-            p_lower = p_clean.lower()
-            match_score = title_score + sum(2 for kw in keywords if kw in p_lower)
+            s_lower = s_clean.lower()
+            match_score = title_score + sum(2 for kw in keywords if kw in s_lower)
             if match_score > 0:
-                clean_matches.append((match_score, p_clean))
+                clean_matches.append((match_score, s_clean))
 
     if clean_matches:
         clean_matches.sort(key=lambda x: x[0], reverse=True)
         top_excerpts = []
         seen = set()
         for _, text in clean_matches:
-            # Skip noise titles
-            if text.upper() in ["HOSTEL FACILITY.", "LOCATION MAP.", "MENU."]:
-                continue
             if text not in seen:
                 seen.add(text)
                 top_excerpts.append(text)
@@ -194,21 +190,41 @@ Guidelines:
         # Smart intent-based introductory sentence
         query_lower = query_text.lower()
         if "hostel" in query_lower:
-            intro = "Yes, NRI University provides safe, comfortable, and well-maintained hostel accommodation for students."
+            intro = "NRI University provides safe, comfortable, and well-maintained hostel accommodation for students."
         elif "location" in query_lower or "address" in query_lower or "map" in query_lower or "where" in query_lower:
-            intro = "NRI University (NRI Institute of Technology) is located at Pothavarappadu, Agiripalli Mandal, near Vijayawada, Andhra Pradesh. Bus transportation is available across Vijayawada and surrounding regions."
+            intro = "NRI University (NRI Institute of Technology) is located at Pothavarappadu, Agiripalli Mandal, near Vijayawada, Andhra Pradesh."
         elif "fee" in query_lower or "cost" in query_lower or "fee structure" in query_lower:
             intro = f"Here are the fee details available in our official brochure for *{selected_branch}*:"
         else:
-            intro = f"Here is the information available regarding *{query_text.strip()}*:"
+            intro = f"Here is information regarding *{query_text.strip()}*:"
 
-        bullet_content = "\n\n• ".join(top_excerpts)
-        reply_text = f"{intro}\n\n• {bullet_content}"
-        
+        if top_excerpts:
+            bullet_content = "\n\n• ".join(top_excerpts)
+            reply_text = f"{intro}\n\n• {bullet_content}"
+        else:
+            reply_text = intro
+
+        # Cap total reply text length to 400 characters max for clean WhatsApp display
+        if len(reply_text) > 400:
+            reply_text = reply_text[:397] + "..."
+
         return {
             "reply_text": reply_text,
             "source": "Document Knowledge Base",
             "buttons": []
         }
 
-    return None
+    # Friendly conversational fallback if query didn't match specific brochure excerpts
+    query_lower = query_text.lower()
+    if "hostel" in query_lower:
+        fallback_reply = "NRI University offers modern hostel accommodation with 24/7 security, dining, and Wi-Fi facilities for both boys and girls. Would you like an admissions counselor to call you with full hostel fee details?"
+    elif "location" in query_lower or "where" in query_lower or "address" in query_lower:
+        fallback_reply = "NRI University is located at Pothavarappadu, Agiripalli Mandal, near Vijayawada, Andhra Pradesh. College buses are available across Vijayawada and nearby areas."
+    else:
+        fallback_reply = f"Thank you for asking about *{query_text.strip()}*! Our admissions team can provide full details. Would you like a counselor to contact you?"
+
+    return {
+        "reply_text": fallback_reply,
+        "source": "AI Admissions Assistant",
+        "buttons": ["Contact Counselor"]
+    }
