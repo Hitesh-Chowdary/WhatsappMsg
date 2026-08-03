@@ -57,6 +57,10 @@ echo [INFO] 2. Installing / Updating Python dependencies...
 pip install -r requirements.txt > nul 2>&1
 
 echo.
+echo [INFO] 3. Configuring Windows Firewall for Port 8000 LAN Access...
+netsh advfirewall firewall add rule name="WhatsApp Automation Port 8000" dir=in action=allow protocol=TCP localport=8000 >nul 2>&1
+
+echo.
 echo ======================================================================
 echo 🟢 STARTING PRODUCTION SERVER ON PORT 8000...
 echo.

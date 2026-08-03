@@ -28,6 +28,7 @@ def main():
         ".env.example",
         "requirements.txt",
         "run_production.bat",
+        "setup_autostart.bat",
         "start.bat",
         "reset_password.py",
         "README.md"
