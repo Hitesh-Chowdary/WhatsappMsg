@@ -395,12 +395,10 @@ class WebsiteKnowledge(Base):
 
 async def init_db():
     """Initializes the database schema by creating required tables and seeding default template."""
-    try:
-        async with engine.begin() as conn:
-            # Create all tables in the database if they do not exist
-            await conn.run_sync(Base.metadata.create_all)
-    except Exception as e:
-        logger.warning(f"Database metadata create notice: {e}")
+    logger.info("Verifying and creating PostgreSQL database tables...")
+    async with engine.begin() as conn:
+        # Create all tables in the database if they do not exist
+        await conn.run_sync(Base.metadata.create_all)
             
     # Execute ALTER statements in individual transactions so locks are released immediately
     alter_statements = [

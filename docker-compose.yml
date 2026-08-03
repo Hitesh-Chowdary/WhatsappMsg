@@ -10,7 +10,7 @@ services:
     # CRITICAL: Binds container virtual network interface card to the licensed MAC address expected by PyArmor
     mac_address: 44:f7:9f:db:15:c1
     ports:
-      - "127.0.0.1:8001:8000"
+      - "8001:8000"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - WHATSAPP_CLIENT_TYPE=${WHATSAPP_CLIENT_TYPE:-meta_cloud}
