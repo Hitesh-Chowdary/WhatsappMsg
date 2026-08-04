@@ -903,6 +903,7 @@ function App() {
     try {
       const res = await authFetch(`${API_BASE}/api/v1/chat/history/${recordId}`);
       if (res.ok) {
+        const data = await res.json();
         const rawMsgs = data.messages || [];
         const sortedMsgs = [...rawMsgs].sort((a, b) => {
           const tA = new Date(a.created_at).getTime();
