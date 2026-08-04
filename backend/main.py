@@ -518,22 +518,26 @@ from datetime import timedelta
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # JWT Configuration constants
-# JWT Configuration constants
 JWT_SECRET = os.getenv("JWT_SECRET")
-client_type = os.getenv("WHATSAPP_CLIENT_TYPE", "mock").lower()
-is_meta_mode = client_type in ["meta", "meta_cloud"]
-
-if not JWT_SECRET or JWT_SECRET == "change_me_to_a_random_secret_in_production":
-    import sys
-    is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "true"
-    is_docker = os.path.exists("/.dockerenv")
-    if not is_testing and is_docker and is_meta_mode:
-        raise ValueError(
-            "CRITICAL: JWT_SECRET environment variable is missing or set to the default placeholder! "
-            "For security in production (Meta mode), you must generate a secure random key and configure JWT_SECRET in your .env file."
-        )
-    # Default fallback for development/mock testing only
-    JWT_SECRET = "supersecretkeychangeinproduction_9f83ea01"
+if not JWT_SECRET or JWT_SECRET.strip() in ["", "change_me_to_a_random_secret_in_production"]:
+    import secrets
+    new_secret = secrets.token_hex(32)
+    JWT_SECRET = new_secret
+    try:
+        env_path = os.path.join(os.getcwd(), ".env")
+        if os.path.exists(env_path):
+            with open(env_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            if "JWT_SECRET=" in content:
+                import re
+                content = re.sub(r"JWT_SECRET=.*", f"JWT_SECRET={new_secret}", content)
+            else:
+                content += f"\nJWT_SECRET={new_secret}\n"
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info("Auto-generated and persisted secure 64-character JWT_SECRET in .env file.")
+    except Exception as e:
+        logger.warning(f"Auto-generated transient JWT_SECRET (could not write to .env): {e}")
 
 # Enforce strict configuration settings in production Meta mode (when running inside Docker)
 import sys
@@ -2133,40 +2137,44 @@ async def handle_quick_reply_auto_response(
         await db.commit()
         logger.info(f"Auto-response sent and logged for record ID {record.id} quick reply '{button_text}'.")
 
-def match_keyword(keyword: str, text: str) -> bool:
+def match_keyword(keyword: str, text: str, is_global: bool = False) -> bool:
     import re
     if not keyword or not text:
         return False
     kw = keyword.lower().strip()
     txt = text.lower().strip()
     
-    # 1. Exact match
+    # 1. Exact match (all flows)
     if kw == txt:
         return True
         
-    # 2. Substring match (e.g. 'fees' in 'tell me the fee structure' or 'what about fees')
-    if kw in txt or txt in kw:
-        return True
-
-    # 3. Singular / plural stem tolerance (e.g. 'fees' vs 'fee', 'courses' vs 'course')
-    kw_stem = kw.rstrip('s')
-    txt_words = [w.strip(".,!?\"'()") for w in txt.split()]
-    for word in txt_words:
-        word_stem = word.rstrip('s')
-        if len(kw_stem) >= 3 and (kw_stem == word_stem or kw_stem in word or word_stem in kw_stem):
-            return True
-            
-    # 4. Regex word boundary search
+    # 2. Strict word boundary match (all flows)
     pattern = rf"\b{re.escape(kw)}\b"
     if re.search(pattern, txt):
         return True
-        
+
+    # 3. Broad substring & plural/singular stem matching ONLY for Global Default Flow
+    if is_global:
+        # Substring match for longer keywords (len >= 3) e.g., 'fees' inside 'tell me the fee structure'
+        if len(kw) >= 3 and (kw in txt or txt in kw):
+            return True
+
+        # Singular / plural stem tolerance (e.g. 'fees' vs 'fee', 'courses' vs 'course')
+        kw_stem = kw.rstrip('s')
+        txt_words = [w.strip(".,!?\"'()") for w in txt.split()]
+        for word in txt_words:
+            word_stem = word.rstrip('s')
+            if len(kw_stem) >= 3 and (kw_stem == word_stem or kw_stem in word or word_stem in kw_stem):
+                return True
+
     return False
 
 # Helper to process incoming text replies and trigger auto-responder
 async def get_bot_response(message_text: str, db: AsyncSession, record: Record, template_name: Optional[str] = None, sender: str = "student") -> Optional[dict]:
     """
     Checks if there is an active BotFlow and traverses it to find a matching response.
+    Template flows use strict word-boundary matching to prevent "OK" matching "NOT OK".
+    Global Default Flow allows broad substring/phrase matching across user inquiry strings.
     Prioritizes explicit keyword matches across all active flows first.
     Only triggers fallback/default messages if no keyword matched.
     """
@@ -2176,11 +2184,12 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
     current_vars = record.variables or {}
     active_flow_id = current_vars.get("active_flow_id")
     
-    def traverse_flow(flow_data: dict, match_default_only: bool = False) -> Optional[dict]:
+    def traverse_flow(flow_data: dict, match_default_only: bool = False, is_global: bool = False) -> Optional[dict]:
         nodes = flow_data.get("nodes", [])
         edges = flow_data.get("edges", [])
         
         trigger_nodes = [n for n in nodes if n.get("type") == "trigger"]
+        # Sort trigger nodes by length descending so multi-word triggers (e.g. "NOT OK") are evaluated before "OK"
         trigger_nodes.sort(key=lambda n: len(n.get("data", {}).get("keyword", "")), reverse=True)
         
         trigger_node = None
@@ -2188,7 +2197,7 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
             # Look for explicit keyword triggers
             for node in trigger_nodes:
                 keyword = node.get("data", {}).get("keyword", "").lower().strip()
-                if keyword and keyword not in ["default", "fallback"] and match_keyword(keyword, normalized_text):
+                if keyword and keyword not in ["default", "fallback"] and match_keyword(keyword, normalized_text, is_global=is_global):
                     trigger_node = node
                     break
         else:
@@ -2232,17 +2241,17 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
     
     # --- PHASE 1: EXPLICIT KEYWORD MATCHING ACROSS ALL FLOWS ---
     
-    # 1. Try matching explicit keywords in currently active flow context
+    # 1. Try matching explicit keywords in currently active flow context (strict word matching)
     if active_flow_id:
         flow_stmt = select(BotFlow).where(BotFlow.id == active_flow_id, BotFlow.is_active == True).limit(1)
         flow_res = await db.execute(flow_stmt)
         active_flow = flow_res.scalars().first()
         if active_flow and active_flow.flow_data:
-            res = traverse_flow(active_flow.flow_data, match_default_only=False)
+            res = traverse_flow(active_flow.flow_data, match_default_only=False, is_global=False)
             if res:
                 matched_flow = active_flow
                 
-    # 2. Try matching explicit keywords in template-specific active BotFlow
+    # 2. Try matching explicit keywords in template-specific active BotFlow (strict word matching)
     if not res and template_name:
         tmpl_stmt = select(BotFlow).where(
             BotFlow.is_active == True,
@@ -2251,11 +2260,11 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         tmpl_res = await db.execute(tmpl_stmt)
         active_tmpl_flow = tmpl_res.scalars().first()
         if active_tmpl_flow and active_tmpl_flow.flow_data:
-            res = traverse_flow(active_tmpl_flow.flow_data, match_default_only=False)
+            res = traverse_flow(active_tmpl_flow.flow_data, match_default_only=False, is_global=False)
             if res:
                 matched_flow = active_tmpl_flow
                 
-    # 3. Try matching explicit keywords in active global BotFlow
+    # 3. Try matching explicit keywords in active global BotFlow (broad phrase matching allowed)
     if not res:
         global_stmt = select(BotFlow).where(
             BotFlow.is_active == True,
@@ -2264,7 +2273,7 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         global_res = await db.execute(global_stmt)
         active_global_flow = global_res.scalars().first()
         if active_global_flow and active_global_flow.flow_data:
-            res = traverse_flow(active_global_flow.flow_data, match_default_only=False)
+            res = traverse_flow(active_global_flow.flow_data, match_default_only=False, is_global=True)
             if res:
                 matched_flow = active_global_flow
                 
@@ -3326,15 +3335,6 @@ async def update_counselor_status(
         vars_copy.pop("scheduled_call", None)
         vars_copy.pop("contact_requested", None)
         record.variables = vars_copy
-
-        # Auto-resolve all notes for this record so reminder badge drops to 0
-        from database import RecordNote
-        from sqlalchemy import update as sql_update
-        note_stmt = sql_update(RecordNote).where(
-            RecordNote.record_id == id,
-            RecordNote.resolved == False
-        ).values(resolved=True)
-        await db.execute(note_stmt)
 
         note = RecordNote(
             record_id=id,
