@@ -27,9 +27,25 @@ if BACKEND_DIR not in sys.path:
 from database import init_db, get_db, Record, AsyncSessionLocal, CampaignTemplate, AdminUser, CampaignLog, ChatMessage, AutoReplyRule, RecordNote, BotFlow, BrochureDocument, WebsiteKnowledge
 from whatsapp_service import get_whatsapp_client, WhatsAppClient
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging to console and persistent log file (logs/app.log)
+import logging.handlers
+log_dir = os.path.join(PROJECT_ROOT, "logs")
+os.makedirs(log_dir, exist_ok=True)
+log_file_path = os.path.join(log_dir, "app.log")
+
+log_formatter = logging.Formatter('%(levelname)s: %(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+file_handler = logging.handlers.RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
+file_handler.setFormatter(log_formatter)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(log_formatter)
+
 logger = logging.getLogger("admission_engine")
+logger.setLevel(logging.INFO)
+logger.handlers.clear()
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 # Create required UI folders if they do not exist
 os.makedirs(os.path.join(PROJECT_ROOT, "frontend", "templates"), exist_ok=True)
@@ -4510,6 +4526,7 @@ async def create_contact(
     db.add(contact)
     await db.commit()
     await db.refresh(contact)
+    logger.info(f"Added new contact: {contact.student_name} (+{contact.phone_number})")
     return {"status": "success", "contact": contact.to_dict()}
 
 @app.put("/api/v1/contacts/{id}")
