@@ -57,18 +57,18 @@ echo [INFO] 2. Installing / Updating Python dependencies...
 pip install -r requirements.txt > nul 2>&1
 
 echo.
-echo [INFO] 3. Configuring Windows Firewall for Port 8000 LAN Access...
-netsh advfirewall firewall add rule name="WhatsApp Automation Port 8000" dir=in action=allow protocol=TCP localport=8000 >nul 2>&1
+echo [INFO] 3. Configuring Windows Firewall for Port 8001 LAN Access...
+netsh advfirewall firewall add rule name="WhatsApp Automation Port 8001" dir=in action=allow protocol=TCP localport=8001 >nul 2>&1
 
 echo.
 echo ======================================================================
-echo 🟢 STARTING PRODUCTION SERVER ON PORT 8000...
+echo 🟢 STARTING PRODUCTION SERVER ON PORT 8001...
 echo.
-echo 📍 Access locally on this machine:   http://localhost:8000
-echo 📍 Access from LAN / College Wi-Fi:  http://0.0.0.0:8000
+echo 📍 Access locally on this machine:   http://localhost:8001
+echo 📍 Access from LAN / College Wi-Fi:  http://0.0.0.0:8001
 echo ======================================================================
 echo.
 
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 4
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --workers 4
 
 pause
