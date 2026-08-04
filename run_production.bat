@@ -35,6 +35,15 @@ if not exist .env (
     echo [INFO] Existing .env configuration file detected.
 )
 
+:: Step 2: Read PORT from .env file (default to 8001 if not set)
+set PORT=8001
+for /f "usebackq tokens=1,2 delims==" %%a in (".env") do (
+    if /i "%%a"=="PORT" set PORT=%%b
+)
+:: Trim trailing whitespace or quotes if any
+set PORT=%PORT: "=%
+set PORT=%PORT:"=%
+
 echo.
 echo [INFO] 1. Checking Frontend Production Build...
 if not exist frontend\dist\index.html (
@@ -57,18 +66,18 @@ echo [INFO] 2. Installing / Updating Python dependencies...
 pip install -r requirements.txt > nul 2>&1
 
 echo.
-echo [INFO] 3. Configuring Windows Firewall for Port 8001 LAN Access...
-netsh advfirewall firewall add rule name="WhatsApp Automation Port 8001" dir=in action=allow protocol=TCP localport=8001 >nul 2>&1
+echo [INFO] 3. Configuring Windows Firewall for Port %PORT% LAN Access...
+netsh advfirewall firewall add rule name="WhatsApp Automation Port %PORT%" dir=in action=allow protocol=TCP localport=%PORT% >nul 2>&1
 
 echo.
 echo ======================================================================
-echo 🟢 STARTING PRODUCTION SERVER ON PORT 8001...
+echo 🟢 STARTING PRODUCTION SERVER ON PORT %PORT%...
 echo.
-echo 📍 Access locally on this machine:   http://localhost:8001
-echo 📍 Access from LAN / College Wi-Fi:  http://0.0.0.0:8001
+echo 📍 Access locally on this machine:   http://localhost:%PORT%
+echo 📍 Access from LAN / College Wi-Fi:  http://0.0.0.0:%PORT%
 echo ======================================================================
 echo.
 
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --workers 4
+python -m uvicorn backend.main:app --host 0.0.0.0 --port %PORT% --workers 4
 
 pause

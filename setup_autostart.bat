@@ -2,16 +2,25 @@
 TITLE WhatsApp Automation 24/7 Autostart Installer
 color 0B
 echo ======================================================================
-echo     ⚙️ CONFIGURING 24/7 AUTOSTART ON WINDOWS BOOT (PORT 8001)
+echo     ⚙️ CONFIGURING 24/7 AUTOSTART ON WINDOWS BOOT
 echo ======================================================================
 echo.
 
-set TASK_NAME=WhatsAppAutomationServer
 set SCRIPT_PATH=%~dp0run_production.bat
 
-echo [1/2] Adding Windows Firewall Rule for Port 8001...
-netsh advfirewall firewall add rule name="WhatsApp Automation Port 8001" dir=in action=allow protocol=TCP localport=8001 >nul 2>&1
-echo [OK] Firewall configured to allow LAN / Public access on Port 8001.
+:: Read PORT from .env if present (default to 8001)
+set PORT=8001
+if exist .env (
+    for /f "usebackq tokens=1,2 delims==" %%a in (".env") do (
+        if /i "%%a"=="PORT" set PORT=%%b
+    )
+)
+set PORT=%PORT: "=%
+set PORT=%PORT:"=%
+
+echo [1/2] Adding Windows Firewall Rule for Port %PORT%...
+netsh advfirewall firewall add rule name="WhatsApp Automation Port %PORT%" dir=in action=allow protocol=TCP localport=%PORT% >nul 2>&1
+echo [OK] Firewall configured to allow LAN / Public access on Port %PORT%.
 
 echo.
 echo [2/2] Registering 24/7 Background Startup Task...
@@ -27,7 +36,8 @@ if %errorlevel% equ 0 (
     echo 📌 Features:
     echo 1. NO Docker Desktop required!
     echo 2. Runs automatically in the background whenever Windows boots up.
-    echo 3. Accessible 24/7 at http://localhost:8001 or http://<IP>:8001
+    echo 3. Configured to listen on Port %PORT%.
+    echo 4. Accessible 24/7 at http://localhost:%PORT% or http://<IP>:%PORT%
     echo ======================================================================
 ) else (
     echo ❌ [ERROR] Could not write to Startup folder. Please run as Administrator.
