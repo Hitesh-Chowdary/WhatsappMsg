@@ -2140,16 +2140,26 @@ def match_keyword(keyword: str, text: str) -> bool:
     kw = keyword.lower().strip()
     txt = text.lower().strip()
     
-    # 1. Exact match (ignoring case & extra spaces)
     # 1. Exact match
     if kw == txt:
         return True
         
-    # 2. Word boundary search for longer multi-word phrases (len > 2)
-    if len(kw) > 2:
-        pattern = rf"\b{re.escape(kw)}\b"
-        if re.search(pattern, txt):
+    # 2. Substring match (e.g. 'fees' in 'tell me the fee structure' or 'what about fees')
+    if kw in txt or txt in kw:
+        return True
+
+    # 3. Singular / plural stem tolerance (e.g. 'fees' vs 'fee', 'courses' vs 'course')
+    kw_stem = kw.rstrip('s')
+    txt_words = [w.strip(".,!?\"'()") for w in txt.split()]
+    for word in txt_words:
+        word_stem = word.rstrip('s')
+        if len(kw_stem) >= 3 and (kw_stem == word_stem or kw_stem in word or word_stem in kw_stem):
             return True
+            
+    # 4. Regex word boundary search
+    pattern = rf"\b{re.escape(kw)}\b"
+    if re.search(pattern, txt):
+        return True
         
     return False
 
@@ -2157,7 +2167,8 @@ def match_keyword(keyword: str, text: str) -> bool:
 async def get_bot_response(message_text: str, db: AsyncSession, record: Record, template_name: Optional[str] = None, sender: str = "student") -> Optional[dict]:
     """
     Checks if there is an active BotFlow and traverses it to find a matching response.
-    Falls back to AutoReplyRules if no active BotFlow exists or no match is found in the flow.
+    Prioritizes explicit keyword matches across all active flows first.
+    Only triggers fallback/default messages if no keyword matched.
     """
     normalized_text = message_text.lower().strip()
     requester_label = "Parent" if sender == "parent" else "Student"
@@ -2165,32 +2176,30 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
     current_vars = record.variables or {}
     active_flow_id = current_vars.get("active_flow_id")
     
-    def traverse_flow(flow_data: dict) -> Optional[dict]:
+    def traverse_flow(flow_data: dict, match_default_only: bool = False) -> Optional[dict]:
         nodes = flow_data.get("nodes", [])
         edges = flow_data.get("edges", [])
         
-        # Sort trigger nodes by keyword length descending (so "not ok" is evaluated before "ok")
         trigger_nodes = [n for n in nodes if n.get("type") == "trigger"]
         trigger_nodes.sort(key=lambda n: len(n.get("data", {}).get("keyword", "")), reverse=True)
         
         trigger_node = None
-        for node in trigger_nodes:
-            keyword = node.get("data", {}).get("keyword", "").lower().strip()
-            if keyword and match_keyword(keyword, normalized_text):
-                trigger_node = node
-                break
-        
-        # If no explicit keyword trigger matches, look for default trigger
-        if not trigger_node:
-            for node in nodes:
-                if node.get("type") == "trigger":
-                    keyword = node.get("data", {}).get("keyword", "").lower().strip()
-                    if keyword == "default" or keyword == "fallback":
-                        trigger_node = node
-                        break
+        if not match_default_only:
+            # Look for explicit keyword triggers
+            for node in trigger_nodes:
+                keyword = node.get("data", {}).get("keyword", "").lower().strip()
+                if keyword and keyword not in ["default", "fallback"] and match_keyword(keyword, normalized_text):
+                    trigger_node = node
+                    break
+        else:
+            # Look ONLY for default/fallback triggers
+            for node in trigger_nodes:
+                keyword = node.get("data", {}).get("keyword", "").lower().strip()
+                if keyword in ["default", "fallback"]:
+                    trigger_node = node
+                    break
                         
         if trigger_node:
-            # Find edge originating from this trigger node
             trigger_id = trigger_node.get("id")
             next_node_id = None
             for edge in edges:
@@ -2199,13 +2208,11 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
                     break
             
             if next_node_id:
-                # Find the next node (should be a message node)
                 for node in nodes:
                     if node.get("id") == next_node_id and node.get("type") == "message":
                         data = node.get("data", {})
                         reply_text = data.get("text", "")
                         buttons = data.get("buttons", [])
-                        # Strip empty buttons
                         buttons = [b.strip() for b in buttons if b and b.strip()]
                         media_url = data.get("mediaUrl") or data.get("media_url") or None
                         interactive_type = data.get("interactiveType", "button")
@@ -2223,30 +2230,32 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
     matched_flow = None
     res = None
     
-    # 1. Try matching within the currently active flow context first
+    # --- PHASE 1: EXPLICIT KEYWORD MATCHING ACROSS ALL FLOWS ---
+    
+    # 1. Try matching explicit keywords in currently active flow context
     if active_flow_id:
         flow_stmt = select(BotFlow).where(BotFlow.id == active_flow_id, BotFlow.is_active == True).limit(1)
         flow_res = await db.execute(flow_stmt)
         active_flow = flow_res.scalars().first()
         if active_flow and active_flow.flow_data:
-            res = traverse_flow(active_flow.flow_data)
+            res = traverse_flow(active_flow.flow_data, match_default_only=False)
             if res:
                 matched_flow = active_flow
                 
-    # 2. Check template-specific active BotFlow
+    # 2. Try matching explicit keywords in template-specific active BotFlow
     if not res and template_name:
         tmpl_stmt = select(BotFlow).where(
             BotFlow.is_active == True,
             func.lower(BotFlow.template_name) == template_name.lower()
         ).limit(1)
         tmpl_res = await db.execute(tmpl_stmt)
-        active_flow = tmpl_res.scalars().first()
-        if active_flow and active_flow.flow_data:
-            res = traverse_flow(active_flow.flow_data)
+        active_tmpl_flow = tmpl_res.scalars().first()
+        if active_tmpl_flow and active_tmpl_flow.flow_data:
+            res = traverse_flow(active_tmpl_flow.flow_data, match_default_only=False)
             if res:
-                matched_flow = active_flow
+                matched_flow = active_tmpl_flow
                 
-    # 3. Check active global BotFlow (where template_name is None or empty string)
+    # 3. Try matching explicit keywords in active global BotFlow
     if not res:
         global_stmt = select(BotFlow).where(
             BotFlow.is_active == True,
@@ -2255,11 +2264,79 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         global_res = await db.execute(global_stmt)
         active_global_flow = global_res.scalars().first()
         if active_global_flow and active_global_flow.flow_data:
-            res = traverse_flow(active_global_flow.flow_data)
+            res = traverse_flow(active_global_flow.flow_data, match_default_only=False)
             if res:
                 matched_flow = active_global_flow
                 
-    # If a flow was matched and resolved a response, save active context to record
+    # 4. Try matching explicit keywords in AutoReplyRules (Legacy)
+    if not res:
+        rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
+        rules_res = await db.execute(rules_stmt)
+        all_rules = rules_res.scalars().all()
+        
+        matched_rule = None
+        for rule in all_rules:
+            if rule.keyword != "default" and match_keyword(rule.keyword, normalized_text):
+                matched_rule = rule
+                break
+                
+        if matched_rule:
+            res = {
+                "reply_text": matched_rule.reply_text,
+                "buttons": [],
+                "media_url": None,
+                "source_keyword": matched_rule.keyword
+            }
+
+    # 5. Check for stop/closing words
+    if not res and normalized_text in ["stop", "bye", "cancel", "exit", "quit", "unsubscribe", "optout"]:
+        res = {
+            "reply_text": "Thank you! Feel free to reach out anytime if you need further assistance.",
+            "buttons": [],
+            "media_url": None,
+            "source_keyword": normalized_text
+        }
+
+    # --- PHASE 2: FALLBACK TRIGGER (ONLY IF NO KEYWORD MATCHED ANYWHERE) ---
+    if not res:
+        # Check active flow default trigger
+        if active_flow_id:
+            flow_stmt = select(BotFlow).where(BotFlow.id == active_flow_id, BotFlow.is_active == True).limit(1)
+            flow_res = await db.execute(flow_stmt)
+            af = flow_res.scalars().first()
+            if af and af.flow_data:
+                res = traverse_flow(af.flow_data, match_default_only=True)
+                if res:
+                    matched_flow = af
+
+        # Check global flow default trigger
+        if not res:
+            global_stmt = select(BotFlow).where(
+                BotFlow.is_active == True,
+                or_(BotFlow.template_name == None, BotFlow.template_name == "")
+            ).limit(1)
+            global_res = await db.execute(global_stmt)
+            agf = global_res.scalars().first()
+            if agf and agf.flow_data:
+                res = traverse_flow(agf.flow_data, match_default_only=True)
+                if res:
+                    matched_flow = agf
+
+        # Check AutoReplyRules default rule
+        if not res:
+            rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
+            rules_res = await db.execute(rules_stmt)
+            all_rules = rules_res.scalars().all()
+            default_rule = next((r for r in all_rules if r.keyword == "default"), None)
+            if default_rule:
+                res = {
+                    "reply_text": default_rule.reply_text,
+                    "buttons": [],
+                    "media_url": None,
+                    "source_keyword": default_rule.keyword
+                }
+
+    # Save matched active flow context to record
     if matched_flow:
         record.variables = {**current_vars, "active_flow_id": matched_flow.id}
         from sqlalchemy.orm.attributes import flag_modified
@@ -2267,45 +2344,8 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         
     if res:
         return res
-        
-    # 4. Fallback to AutoReplyRules (Legacy)
-    rules_stmt = select(AutoReplyRule).where(AutoReplyRule.is_active == True)
-    rules_res = await db.execute(rules_stmt)
-    all_rules = rules_res.scalars().all()
-    
-    matched_rule = None
-    for rule in all_rules:
-        if rule.keyword != "default" and match_keyword(rule.keyword, normalized_text):
-            matched_rule = rule
-            break
-            
-    if matched_rule:
-        return {
-            "reply_text": matched_rule.reply_text,
-            "buttons": [],
-            "media_url": None,
-            "source_keyword": matched_rule.keyword
-        }
 
-    # 5. Check for stop/closing words & counselor request phrases
-    if normalized_text in ["stop", "bye", "cancel", "exit", "quit", "unsubscribe", "optout"]:
-        return {
-            "reply_text": "Thank you! Feel free to reach out anytime if you need further assistance.",
-            "buttons": [],
-            "media_url": None,
-            "source_keyword": normalized_text
-        }
-
-    # 6. Default Fallback Rule or Clean Counselor Handover Reply
-    default_rule = next((r for r in all_rules if r.keyword == "default"), None)
-    if default_rule:
-        return {
-            "reply_text": default_rule.reply_text,
-            "buttons": [],
-            "media_url": None,
-            "source_keyword": default_rule.keyword
-        }
-        
+    # Final fallback if absolutely nothing matched
     if record:
         record.parent_response = "Counselor Needed"
         vars_copy = dict(record.variables or {})
@@ -2313,6 +2353,8 @@ async def get_bot_response(message_text: str, db: AsyncSession, record: Record, 
         vars_copy["call_requested_by"] = requester_label
         vars_copy["scheduled_call"] = f"[{requester_label}] Inquiry: {message_text.strip()}"
         record.variables = vars_copy
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(record, "variables")
 
     return {
         "reply_text": "Thank you for reaching out to NRI University. Our counselor will reach you soon.",
@@ -3653,6 +3695,8 @@ async def get_chat_history(
         current_vars = record_obj.variables or {}
         if current_vars.get("unread_count", 0) > 0:
             record_obj.variables = {**current_vars, "unread_count": 0}
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(record_obj, "variables")
             await db.commit()
 
     return {

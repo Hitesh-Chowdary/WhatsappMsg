@@ -1366,29 +1366,20 @@ function App() {
     const isSelectionChanged = isChatSelectionChangedRef.current;
     const isForced = forceScrollRef.current;
     const container = chatContainerRef.current;
-    const threshold = 250;
+    const threshold = 60; // 60px threshold so scrolling up is respected
     const isNearBottom = container ? (container.scrollHeight - container.scrollTop - container.clientHeight) <= threshold : true;
 
-    if (isSelectionChanged || isNearBottom || isForced) {
+    if (isSelectionChanged || isForced || isNearBottom) {
       scrollToBottom();
       
-      // Retry multiple times to ensure scroll succeeds even if images or layout calculations take time
-      const t1 = setTimeout(scrollToBottom, 50);
-      const t2 = setTimeout(scrollToBottom, 150);
-      const t3 = setTimeout(scrollToBottom, 350);
-      const t4 = setTimeout(scrollToBottom, 600);
-
-      if (isSelectionChanged) {
-        isChatSelectionChangedRef.current = false;
+      if (isSelectionChanged || isForced) {
+        const t1 = setTimeout(scrollToBottom, 50);
+        if (isSelectionChanged) {
+          isChatSelectionChangedRef.current = false;
+        }
+        forceScrollRef.current = false;
+        return () => clearTimeout(t1);
       }
-      forceScrollRef.current = false;
-
-      return () => {
-        clearTimeout(t1);
-        clearTimeout(t2);
-        clearTimeout(t3);
-        clearTimeout(t4);
-      };
     }
   }, [chatHistory, activeChatRecordId, chatThreadFilter, activeChatSubTab]);
 
@@ -4114,7 +4105,7 @@ function App() {
                                 {chat.record.unread_count}
                               </span>
                             )}
-                            {lastMsg && lastMsg.sender === 'parent' && (
+                            {chat.record.id !== activeChatRecordId && (chat.record.unread_count || 0) > 0 && lastMsg && (lastMsg.sender === 'parent' || lastMsg.sender === 'student') && (
                               <span style={{
                                 width: '8px',
                                 height: '8px',
