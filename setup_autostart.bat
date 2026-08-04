@@ -8,15 +8,12 @@ echo.
 
 set SCRIPT_PATH=%~dp0run_production.bat
 
-:: Read PORT from .env if present (default to 8001)
+:: Read PORT safely (default to 8001)
 set PORT=8001
 if exist .env (
-    for /f "usebackq tokens=1,2 delims==" %%a in (".env") do (
-        if /i "%%a"=="PORT" set PORT=%%b
-    )
+    for /f "tokens=*" %%p in ('python -c "import os; from dotenv import load_dotenv; load_dotenv(); print(os.getenv('PORT', '8001'))" 2^>nul') do set PORT=%%p
 )
-set PORT=%PORT: "=%
-set PORT=%PORT:"=%
+if "%PORT%"=="" set PORT=8001
 
 echo [1/2] Adding Windows Firewall Rule for Port %PORT%...
 netsh advfirewall firewall add rule name="WhatsApp Automation Port %PORT%" dir=in action=allow protocol=TCP localport=%PORT% >nul 2>&1

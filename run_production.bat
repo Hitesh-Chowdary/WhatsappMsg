@@ -35,14 +35,12 @@ if not exist .env (
     echo [INFO] Existing .env configuration file detected.
 )
 
-:: Step 2: Read PORT from .env file (default to 8001 if not set)
+:: Step 2: Read PORT safely (default to 8001 if not set)
 set PORT=8001
-for /f "usebackq tokens=1,2 delims==" %%a in (".env") do (
-    if /i "%%a"=="PORT" set PORT=%%b
+if exist .env (
+    for /f "tokens=*" %%p in ('python -c "import os; from dotenv import load_dotenv; load_dotenv(); print(os.getenv('PORT', '8001'))" 2^>nul') do set PORT=%%p
 )
-:: Trim trailing whitespace or quotes if any
-set PORT=%PORT: "=%
-set PORT=%PORT:"=%
+if "%PORT%"=="" set PORT=8001
 
 echo.
 echo [INFO] 1. Checking Frontend Production Build...
